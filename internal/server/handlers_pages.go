@@ -4,14 +4,17 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/siygle/agentgate/internal/db"
 	"github.com/go-chi/chi/v5"
+	"github.com/siygle/agentgate/internal/db"
 )
 
 // ViewPageData is passed to the diff and files view templates.
 type ViewPageData struct {
 	EncryptedData string // raw JSON string, embedded as data-value attribute
-	ExpiresAt     string // ISO 8601
+	ExpiresAt     string // ISO 8601 — empty when NeverExpires is true
+	NeverExpires  bool
+	ID            string // record id, for the manage PATCH endpoint
+	Kind          string // "diff" or "files" — selects the PATCH endpoint prefix
 }
 
 // renderTemplate executes a named page template with the layout.
@@ -40,14 +43,19 @@ func (s *Server) handleViewDiff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if diff == nil || diff.ExpiredAt.Before(time.Now().UTC()) {
+	if diff == nil || (!diff.NeverExpires && diff.ExpiredAt.Before(time.Now().UTC())) {
 		s.renderTemplate(w, "not_found.html", http.StatusNotFound, nil)
 		return
 	}
 
 	data := ViewPageData{
 		EncryptedData: diff.EncryptedData,
-		ExpiresAt:     diff.ExpiredAt.Format(time.RFC3339),
+		NeverExpires:  diff.NeverExpires,
+		ID:            diff.ID,
+		Kind:          "diff",
+	}
+	if !diff.NeverExpires {
+		data.ExpiresAt = diff.ExpiredAt.Format(time.RFC3339)
 	}
 	s.renderTemplate(w, "diff.html", http.StatusOK, data)
 }
@@ -62,14 +70,19 @@ func (s *Server) handleViewFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if bundle == nil || bundle.ExpiredAt.Before(time.Now().UTC()) {
+	if bundle == nil || (!bundle.NeverExpires && bundle.ExpiredAt.Before(time.Now().UTC())) {
 		s.renderTemplate(w, "not_found.html", http.StatusNotFound, nil)
 		return
 	}
 
 	data := ViewPageData{
 		EncryptedData: bundle.EncryptedData,
-		ExpiresAt:     bundle.ExpiredAt.Format(time.RFC3339),
+		NeverExpires:  bundle.NeverExpires,
+		ID:            bundle.ID,
+		Kind:          "files",
+	}
+	if !bundle.NeverExpires {
+		data.ExpiresAt = bundle.ExpiredAt.Format(time.RFC3339)
 	}
 	s.renderTemplate(w, "files.html", http.StatusOK, data)
 }

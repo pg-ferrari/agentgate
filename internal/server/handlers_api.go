@@ -1,15 +1,27 @@
 package server
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/siygle/agentgate/internal/db"
 	"github.com/siygle/agentgate/internal/id"
 )
 
 const defaultExpiry = 7 * 24 * time.Hour
+
+// sentinelNeverExpiry is the timestamp stored in expired_at for never-expires
+// records. The actual expiry check uses the never_expires flag; this value
+// only exists because the column is NOT NULL.
+var sentinelNeverExpiry = time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
 
 // createRequest is the JSON body for both diff and file-bundle creation.
 type createRequest struct {
@@ -19,6 +31,12 @@ type createRequest struct {
 		Salt       string `json:"salt"`
 	} `json:"encrypted_data"`
 	ExpiresInSeconds int64 `json:"expires_in_seconds,omitempty"`
+	NeverExpires     bool  `json:"never_expires,omitempty"`
+}
+
+// updateRequest is the JSON body for PATCH endpoints.
+type updateRequest struct {
+	NeverExpires *bool `json:"never_expires,omitempty"`
 }
 
 type apiResponse struct {
@@ -29,59 +47,29 @@ type apiResponse struct {
 
 type createResponseData struct {
 	PreviewURL string `json:"preview_url"`
+	ManageURL  string `json:"manage_url"`
 	ID         string `json:"id"`
+	OwnerToken string `json:"owner_token"`
+}
+
+type updateResponseData struct {
+	ID           string `json:"id"`
+	NeverExpires bool   `json:"never_expires"`
+	ExpiresAt    string `json:"expires_at,omitempty"`
 }
 
 // handleCreateDiff creates an encrypted diff record.
 func (s *Server) handleCreateDiff(w http.ResponseWriter, r *http.Request) {
-	var req createRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, apiResponse{
-			Success: false,
-			Error:   "invalid JSON body",
-		})
-		return
-	}
-
-	if req.EncryptedData.Ciphertext == "" || req.EncryptedData.IV == "" || req.EncryptedData.Salt == "" {
-		writeJSON(w, http.StatusBadRequest, apiResponse{
-			Success: false,
-			Error:   "encrypted_data must include non-empty ciphertext, iv, and salt",
-		})
-		return
-	}
-
-	encJSON, err := json.Marshal(req.EncryptedData)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, apiResponse{
-			Success: false,
-			Error:   "internal server error",
-		})
-		return
-	}
-
-	newID := id.Generate()
-	expiry := time.Now().Add(resolveExpiry(req.ExpiresInSeconds))
-
-	if err := db.CreateDiff(s.db, newID, string(encJSON), expiry); err != nil {
-		writeJSON(w, http.StatusInternalServerError, apiResponse{
-			Success: false,
-			Error:   "internal server error",
-		})
-		return
-	}
-
-	writeJSON(w, http.StatusCreated, apiResponse{
-		Success: true,
-		Data: createResponseData{
-			PreviewURL: s.baseURL + "/p/" + newID,
-			ID:         newID,
-		},
-	})
+	s.handleCreate(w, r, "diff")
 }
 
 // handleCreateFiles creates an encrypted file bundle record.
 func (s *Server) handleCreateFiles(w http.ResponseWriter, r *http.Request) {
+	s.handleCreate(w, r, "files")
+}
+
+// handleCreate is the shared body for both diff and file-bundle creation.
+func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request, kind string) {
 	var req createRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, apiResponse{
@@ -109,9 +97,16 @@ func (s *Server) handleCreateFiles(w http.ResponseWriter, r *http.Request) {
 	}
 
 	newID := id.Generate()
-	expiry := time.Now().Add(resolveExpiry(req.ExpiresInSeconds))
 
-	if err := db.CreateFileBundle(s.db, newID, string(encJSON), expiry); err != nil {
+	var expiry time.Time
+	if req.NeverExpires {
+		expiry = sentinelNeverExpiry
+	} else {
+		expiry = time.Now().Add(resolveExpiry(req.ExpiresInSeconds))
+	}
+
+	ownerToken, ownerHash, err := generateOwnerToken()
+	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, apiResponse{
 			Success: false,
 			Error:   "internal server error",
@@ -119,13 +114,153 @@ func (s *Server) handleCreateFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var pathPrefix string
+	switch kind {
+	case "diff":
+		if err := db.CreateDiff(s.db, newID, string(encJSON), expiry, req.NeverExpires, ownerHash); err != nil {
+			writeJSON(w, http.StatusInternalServerError, apiResponse{
+				Success: false,
+				Error:   "internal server error",
+			})
+			return
+		}
+		pathPrefix = "/p/"
+	case "files":
+		if err := db.CreateFileBundle(s.db, newID, string(encJSON), expiry, req.NeverExpires, ownerHash); err != nil {
+			writeJSON(w, http.StatusInternalServerError, apiResponse{
+				Success: false,
+				Error:   "internal server error",
+			})
+			return
+		}
+		pathPrefix = "/f/"
+	}
+
+	previewURL := s.baseURL + pathPrefix + newID
 	writeJSON(w, http.StatusCreated, apiResponse{
 		Success: true,
 		Data: createResponseData{
-			PreviewURL: s.baseURL + "/f/" + newID,
+			PreviewURL: previewURL,
+			ManageURL:  previewURL + "#owner=" + ownerToken,
 			ID:         newID,
+			OwnerToken: ownerToken,
 		},
 	})
+}
+
+// handleUpdateDiff toggles never_expires (and other future fields) on a diff
+// record, authenticated by the owner token in the Authorization header.
+func (s *Server) handleUpdateDiff(w http.ResponseWriter, r *http.Request) {
+	s.handleUpdate(w, r, "diff")
+}
+
+// handleUpdateFiles toggles never_expires on a file bundle record.
+func (s *Server) handleUpdateFiles(w http.ResponseWriter, r *http.Request) {
+	s.handleUpdate(w, r, "files")
+}
+
+func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request, kind string) {
+	recordID := chi.URLParam(r, "id")
+	if recordID == "" {
+		writeJSON(w, http.StatusBadRequest, apiResponse{Success: false, Error: "id required"})
+		return
+	}
+
+	token := extractBearerToken(r.Header.Get("Authorization"))
+	if token == "" {
+		writeJSON(w, http.StatusUnauthorized, apiResponse{Success: false, Error: "missing bearer token"})
+		return
+	}
+
+	var req updateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, apiResponse{Success: false, Error: "invalid JSON body"})
+		return
+	}
+	if req.NeverExpires == nil {
+		writeJSON(w, http.StatusBadRequest, apiResponse{Success: false, Error: "never_expires required"})
+		return
+	}
+
+	var storedHash string
+	var currentExpiry time.Time
+	var found bool
+
+	switch kind {
+	case "diff":
+		d, err := db.GetDiff(s.db, recordID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, apiResponse{Success: false, Error: "internal server error"})
+			return
+		}
+		if d != nil {
+			found = true
+			currentExpiry = d.ExpiredAt
+			if d.OwnerTokenHash.Valid {
+				storedHash = d.OwnerTokenHash.String
+			}
+		}
+	case "files":
+		fb, err := db.GetFileBundle(s.db, recordID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, apiResponse{Success: false, Error: "internal server error"})
+			return
+		}
+		if fb != nil {
+			found = true
+			currentExpiry = fb.ExpiredAt
+			if fb.OwnerTokenHash.Valid {
+				storedHash = fb.OwnerTokenHash.String
+			}
+		}
+	}
+
+	if !found {
+		writeJSON(w, http.StatusNotFound, apiResponse{Success: false, Error: "not found"})
+		return
+	}
+
+	if storedHash == "" || !verifyOwnerToken(token, storedHash) {
+		writeJSON(w, http.StatusUnauthorized, apiResponse{Success: false, Error: "invalid token"})
+		return
+	}
+
+	// If turning expiry back on and the original deadline is in the past,
+	// reset to now + defaultExpiry so the share doesn't immediately disappear.
+	var newExpiry *time.Time
+	if !*req.NeverExpires {
+		now := time.Now().UTC()
+		if currentExpiry.Before(now) || currentExpiry.Equal(sentinelNeverExpiry) {
+			reset := now.Add(defaultExpiry)
+			newExpiry = &reset
+		}
+	}
+
+	switch kind {
+	case "diff":
+		if err := db.SetDiffNeverExpires(s.db, recordID, *req.NeverExpires, newExpiry); err != nil {
+			writeJSON(w, http.StatusInternalServerError, apiResponse{Success: false, Error: "internal server error"})
+			return
+		}
+	case "files":
+		if err := db.SetFileBundleNeverExpires(s.db, recordID, *req.NeverExpires, newExpiry); err != nil {
+			writeJSON(w, http.StatusInternalServerError, apiResponse{Success: false, Error: "internal server error"})
+			return
+		}
+	}
+
+	respData := updateResponseData{
+		ID:           recordID,
+		NeverExpires: *req.NeverExpires,
+	}
+	if !*req.NeverExpires {
+		effectiveExpiry := currentExpiry
+		if newExpiry != nil {
+			effectiveExpiry = *newExpiry
+		}
+		respData.ExpiresAt = effectiveExpiry.UTC().Format(time.RFC3339)
+	}
+	writeJSON(w, http.StatusOK, apiResponse{Success: true, Data: respData})
 }
 
 func resolveExpiry(expiresInSeconds int64) time.Duration {
@@ -133,6 +268,46 @@ func resolveExpiry(expiresInSeconds int64) time.Duration {
 		return defaultExpiry
 	}
 	return time.Duration(expiresInSeconds) * time.Second
+}
+
+// generateOwnerToken returns (token, sha256HexHash, err). The token is a
+// 32-byte URL-safe random string returned once to the caller; the hex hash is
+// stored server-side.
+func generateOwnerToken() (string, string, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", "", err
+	}
+	token := base64.RawURLEncoding.EncodeToString(buf)
+	sum := sha256.Sum256([]byte(token))
+	return token, hex.EncodeToString(sum[:]), nil
+}
+
+// verifyOwnerToken compares a presented token against a stored sha256 hex
+// hash using a constant-time comparison.
+func verifyOwnerToken(token, storedHash string) bool {
+	if token == "" || storedHash == "" {
+		return false
+	}
+	sum := sha256.Sum256([]byte(token))
+	got := hex.EncodeToString(sum[:])
+	return subtle.ConstantTimeCompare([]byte(got), []byte(storedHash)) == 1
+}
+
+// extractBearerToken parses an Authorization header of the form
+// "Bearer <token>" (case-insensitive on the scheme) and returns the token.
+func extractBearerToken(header string) string {
+	if header == "" {
+		return ""
+	}
+	parts := strings.SplitN(strings.TrimSpace(header), " ", 2)
+	if len(parts) != 2 {
+		return ""
+	}
+	if !strings.EqualFold(parts[0], "Bearer") {
+		return ""
+	}
+	return strings.TrimSpace(parts[1])
 }
 
 // writeJSON encodes v as JSON and writes it with the given status code.

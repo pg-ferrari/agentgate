@@ -74,18 +74,20 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, `Usage: agentgate <command> [options]
 
 Commands:
-  git-latest  [-s server] [-p passphrase] [-t ttl]   Share the latest commit diff
-  git-staged  [-s server] [-p passphrase] [-t ttl]   Share staged changes
-  files       [-s server] [-p passphrase] [-t ttl] <paths...>  Share files
-  key-gen     [key]                                  Generate or set a passphrase
-  key-get                                            Print current passphrase
+  git-latest  [-s server] [-p passphrase] [-t ttl|--no-expiry]              Share the latest commit diff
+  git-staged  [-s server] [-p passphrase] [-t ttl|--no-expiry]              Share staged changes
+  files       [-s server] [-p passphrase] [-t ttl|--no-expiry] <paths...>   Share files
+  key-gen     [key]                                                         Generate or set a passphrase
+  key-get                                                                   Print current passphrase
 
-TTL examples: 12h, 7d, 30m. Server default is 7d.`)
+TTL examples: 12h, 7d, 30m. Server default is 7d.
+Use --no-expiry to keep the share indefinitely (mutually exclusive with -t/--ttl).
+The server returns a Manage URL — keep it private; it is required to toggle indefinite retention later.`)
 }
 
-// parseFlags extracts -s, -p, and -t flags from args, returning server, passphrase,
-// ttl, and remaining positional args.
-func parseFlags(args []string) (server, passphrase, ttl string, rest []string) {
+// parseFlags extracts -s, -p, -t, and --no-expiry flags from args, returning
+// server, passphrase, ttl, noExpiry, and remaining positional args.
+func parseFlags(args []string) (server, passphrase, ttl string, noExpiry bool, rest []string) {
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "-s":
@@ -103,6 +105,8 @@ func parseFlags(args []string) (server, passphrase, ttl string, rest []string) {
 				ttl = args[i+1]
 				i++
 			}
+		case "--no-expiry":
+			noExpiry = true
 		default:
 			rest = append(rest, args[i])
 		}
@@ -200,7 +204,12 @@ func extractFilename(patch string) string {
 	return "unknown"
 }
 
-func encryptAndPost(server, endpoint string, payload any, passphrase, ttl string) {
+func encryptAndPost(server, endpoint string, payload any, passphrase, ttl string, noExpiry bool) {
+	if noExpiry && ttl != "" {
+		fmt.Fprintln(os.Stderr, "error: --no-expiry cannot be combined with -t/--ttl")
+		os.Exit(1)
+	}
+
 	jsonBytes, err := json.Marshal(payload)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error marshaling payload: %v\n", err)
@@ -228,6 +237,9 @@ func encryptAndPost(server, endpoint string, payload any, passphrase, ttl string
 		}
 		body["expires_in_seconds"] = seconds
 	}
+	if noExpiry {
+		body["never_expires"] = true
+	}
 	bodyBytes, _ := json.Marshal(body)
 
 	url := strings.TrimRight(server, "/") + endpoint
@@ -239,11 +251,40 @@ func encryptAndPost(server, endpoint string, payload any, passphrase, ttl string
 	defer resp.Body.Close()
 
 	respBody, _ := io.ReadAll(resp.Body)
-	fmt.Println(string(respBody))
+	printCreateResponse(respBody)
+}
+
+// printCreateResponse decodes the server response and, when successful,
+// prints a friendly summary including the manage URL. Falls back to raw
+// output on parse failure so debugging stays possible.
+func printCreateResponse(body []byte) {
+	var parsed struct {
+		Success bool `json:"success"`
+		Data    struct {
+			PreviewURL string `json:"preview_url"`
+			ManageURL  string `json:"manage_url"`
+			ID         string `json:"id"`
+			OwnerToken string `json:"owner_token"`
+		} `json:"data"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil || (!parsed.Success && parsed.Error == "" && parsed.Data.PreviewURL == "") {
+		fmt.Println(string(body))
+		return
+	}
+	if !parsed.Success {
+		fmt.Fprintf(os.Stderr, "server error: %s\n", parsed.Error)
+		os.Exit(1)
+	}
+	fmt.Printf("Preview URL: %s\n", parsed.Data.PreviewURL)
+	if parsed.Data.ManageURL != "" {
+		fmt.Printf("Manage URL:  %s\n", parsed.Data.ManageURL)
+		fmt.Println("(Keep the Manage URL private — it lets you toggle indefinite retention on this share.)")
+	}
 }
 
 func runGitLatest(args []string) {
-	serverFlag, passFlag, ttlFlag, _ := parseFlags(args)
+	serverFlag, passFlag, ttlFlag, noExpiry, _ := parseFlags(args)
 	server, err := resolveServer(serverFlag)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -273,11 +314,11 @@ func runGitLatest(args []string) {
 		Files: files,
 	}
 
-	encryptAndPost(server, "/api/diff", payload, passphrase, ttlFlag)
+	encryptAndPost(server, "/api/diff", payload, passphrase, ttlFlag, noExpiry)
 }
 
 func runGitStaged(args []string) {
-	serverFlag, passFlag, ttlFlag, _ := parseFlags(args)
+	serverFlag, passFlag, ttlFlag, noExpiry, _ := parseFlags(args)
 	server, err := resolveServer(serverFlag)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -301,11 +342,11 @@ func runGitStaged(args []string) {
 		Files: files,
 	}
 
-	encryptAndPost(server, "/api/diff", payload, passphrase, ttlFlag)
+	encryptAndPost(server, "/api/diff", payload, passphrase, ttlFlag, noExpiry)
 }
 
 func runFiles(args []string) {
-	serverFlag, passFlag, ttlFlag, paths := parseFlags(args)
+	serverFlag, passFlag, ttlFlag, noExpiry, paths := parseFlags(args)
 	server, err := resolveServer(serverFlag)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -336,7 +377,7 @@ func runFiles(args []string) {
 	}
 
 	payload := FilesPayload{Files: files}
-	encryptAndPost(server, "/api/files", payload, passphrase, ttlFlag)
+	encryptAndPost(server, "/api/files", payload, passphrase, ttlFlag, noExpiry)
 }
 
 func runKeyGen(args []string) {

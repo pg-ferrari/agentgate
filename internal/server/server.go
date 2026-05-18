@@ -63,6 +63,8 @@ func New(db *sql.DB, baseURL string, templateFS, staticFS fs.FS) *Server {
 	// API
 	r.Post("/api/diff", s.handleCreateDiff)
 	r.Post("/api/files", s.handleCreateFiles)
+	r.Patch("/api/diff/{id}", s.handleUpdateDiff)
+	r.Patch("/api/files/{id}", s.handleUpdateFiles)
 
 	s.router = r
 	return s

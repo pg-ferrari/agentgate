@@ -302,44 +302,6 @@
     return table;
   }
 
-  function formatRelativeExpiry(expiresAt) {
-    if (!expiresAt) return { text: "", isWarning: false };
-    try {
-      var now = Date.now();
-      var exp = new Date(expiresAt).getTime();
-      var diff = exp - now;
-      if (diff <= 0) return { text: "Expired", isWarning: true };
-      var minutes = Math.floor(diff / 60000);
-      var hours = Math.floor(minutes / 60);
-      var remainMinutes = minutes % 60;
-      var text;
-      if (hours > 0) {
-        text = hours + "h " + remainMinutes + "m remaining";
-      } else {
-        text = minutes + "m remaining";
-      }
-      return { text: text, isWarning: minutes < 60 };
-    } catch (e) {
-      return { text: expiresAt, isWarning: false };
-    }
-  }
-
-  function createExpiryBadge(expiresAt) {
-    var info = formatRelativeExpiry(expiresAt);
-    var badge = document.createElement("span");
-    badge.className = "expiry-badge" + (info.isWarning ? " expiry-badge--warning" : "");
-    badge.innerHTML = '<span class="expiry-dot"></span>' + escapeHtml(info.text);
-
-    // Auto-update every minute
-    setInterval(function () {
-      var updated = formatRelativeExpiry(expiresAt);
-      badge.className = "expiry-badge" + (updated.isWarning ? " expiry-badge--warning" : "");
-      badge.innerHTML = '<span class="expiry-dot"></span>' + escapeHtml(updated.text);
-    }, 60000);
-
-    return badge;
-  }
-
   function getViewMode() {
     try {
       var stored = localStorage.getItem(VIEW_STORAGE_KEY);
@@ -389,10 +351,29 @@
       '<h1 style="font-size:1.125rem;font-weight:600;margin-bottom:0.375rem">' +
       escapeHtml(data.title || "Untitled") +
       "</h1>";
-    headerLeft.appendChild(createExpiryBadge(expiresAt));
+
+    var meta = window.AgentGateExpiry
+      ? window.AgentGateExpiry.getShareMeta()
+      : null;
+    var badgeHandle = window.AgentGateExpiry
+      ? window.AgentGateExpiry.createExpiryBadge(
+          expiresAt,
+          meta && meta.neverExpires
+        )
+      : null;
+    if (badgeHandle) headerLeft.appendChild(badgeHandle.node);
 
     var headerRight = document.createElement("div");
     headerRight.style.flexShrink = "0";
+    headerRight.style.display = "flex";
+    headerRight.style.alignItems = "center";
+    headerRight.style.gap = "0.75rem";
+
+    if (badgeHandle && meta && window.AgentGateExpiry) {
+      var toggle = window.AgentGateExpiry.createOwnerToggle(meta, badgeHandle);
+      if (toggle) headerRight.appendChild(toggle);
+    }
+
     if (window.AgentGateSettings) {
       window.AgentGateSettings.renderSettingsPanel(headerRight);
     }

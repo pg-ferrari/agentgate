@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -24,6 +25,16 @@ CREATE INDEX IF NOT EXISTS idx_diffs_expired ON diffs(expired_at);
 CREATE INDEX IF NOT EXISTS idx_bundles_expired ON file_bundles(expired_at);
 `
 
+// addColumnMigrations are run after the base migrations. Each statement is
+// expected to be idempotent: a "duplicate column" error is treated as success
+// so existing databases pick up new columns on next startup.
+var addColumnMigrations = []string{
+	`ALTER TABLE diffs ADD COLUMN never_expires INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE diffs ADD COLUMN owner_token_hash TEXT`,
+	`ALTER TABLE file_bundles ADD COLUMN never_expires INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE file_bundles ADD COLUMN owner_token_hash TEXT`,
+}
+
 // Open opens a SQLite database at the given path, enables WAL mode,
 // and runs migrations. It returns a ready-to-use *sql.DB.
 func Open(dbPath string) (*sql.DB, error) {
@@ -38,10 +49,21 @@ func Open(dbPath string) (*sql.DB, error) {
 		return nil, fmt.Errorf("enable WAL mode: %w", err)
 	}
 
-	// Run migrations.
+	// Run base migrations.
 	if _, err := db.Exec(migrations); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("run migrations: %w", err)
+	}
+
+	for _, stmt := range addColumnMigrations {
+		if _, err := db.Exec(stmt); err != nil {
+			// SQLite reports "duplicate column name" when the column already
+			// exists. Treat that as a no-op so migrations are idempotent.
+			if !strings.Contains(err.Error(), "duplicate column name") {
+				db.Close()
+				return nil, fmt.Errorf("add-column migration %q: %w", stmt, err)
+			}
+		}
 	}
 
 	return db, nil
