@@ -10,7 +10,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/siygle/agentgate/internal/crypto"
 )
@@ -72,16 +74,18 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, `Usage: agentgate <command> [options]
 
 Commands:
-  git-latest  [-s server] [-p passphrase]   Share the latest commit diff
-  git-staged  [-s server] [-p passphrase]   Share staged changes
-  files       [-s server] [-p passphrase] <paths...>  Share files
-  key-gen     [key]                          Generate or set a passphrase
-  key-get                                    Print current passphrase`)
+  git-latest  [-s server] [-p passphrase] [-t ttl]   Share the latest commit diff
+  git-staged  [-s server] [-p passphrase] [-t ttl]   Share staged changes
+  files       [-s server] [-p passphrase] [-t ttl] <paths...>  Share files
+  key-gen     [key]                                  Generate or set a passphrase
+  key-get                                            Print current passphrase
+
+TTL examples: 12h, 7d, 30m. Server default is 7d.`)
 }
 
-// parseFlags extracts -s and -p flags from args, returning server, passphrase,
-// and remaining positional args.
-func parseFlags(args []string) (server, passphrase string, rest []string) {
+// parseFlags extracts -s, -p, and -t flags from args, returning server, passphrase,
+// ttl, and remaining positional args.
+func parseFlags(args []string) (server, passphrase, ttl string, rest []string) {
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "-s":
@@ -92,6 +96,11 @@ func parseFlags(args []string) (server, passphrase string, rest []string) {
 		case "-p":
 			if i+1 < len(args) {
 				passphrase = args[i+1]
+				i++
+			}
+		case "-t", "--ttl":
+			if i+1 < len(args) {
+				ttl = args[i+1]
 				i++
 			}
 		default:
@@ -119,6 +128,25 @@ func resolvePassphrase(flag string) (string, error) {
 		return env, nil
 	}
 	return "", fmt.Errorf("passphrase required: use -p flag or set AGENTGATE_PASSPHRASE")
+}
+
+func parseTTLSeconds(input string) (int64, error) {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return 0, fmt.Errorf("empty ttl")
+	}
+	if strings.HasSuffix(trimmed, "d") {
+		days, err := strconv.ParseInt(strings.TrimSuffix(trimmed, "d"), 10, 64)
+		if err != nil || days <= 0 {
+			return 0, fmt.Errorf("expected positive day duration such as 7d")
+		}
+		return int64((time.Duration(days) * 24 * time.Hour) / time.Second), nil
+	}
+	duration, err := time.ParseDuration(trimmed)
+	if err != nil || duration <= 0 {
+		return 0, fmt.Errorf("expected positive duration such as 12h, 7d, or 30m")
+	}
+	return int64(duration / time.Second), nil
 }
 
 // runGit executes a git command and returns its stdout.
@@ -172,7 +200,7 @@ func extractFilename(patch string) string {
 	return "unknown"
 }
 
-func encryptAndPost(server, endpoint string, payload any, passphrase string) {
+func encryptAndPost(server, endpoint string, payload any, passphrase, ttl string) {
 	jsonBytes, err := json.Marshal(payload)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error marshaling payload: %v\n", err)
@@ -192,6 +220,14 @@ func encryptAndPost(server, endpoint string, payload any, passphrase string) {
 			"salt":       salt,
 		},
 	}
+	if ttl != "" {
+		seconds, err := parseTTLSeconds(ttl)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "invalid ttl %q: %v\n", ttl, err)
+			os.Exit(1)
+		}
+		body["expires_in_seconds"] = seconds
+	}
 	bodyBytes, _ := json.Marshal(body)
 
 	url := strings.TrimRight(server, "/") + endpoint
@@ -207,7 +243,7 @@ func encryptAndPost(server, endpoint string, payload any, passphrase string) {
 }
 
 func runGitLatest(args []string) {
-	serverFlag, passFlag, _ := parseFlags(args)
+	serverFlag, passFlag, ttlFlag, _ := parseFlags(args)
 	server, err := resolveServer(serverFlag)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -237,11 +273,11 @@ func runGitLatest(args []string) {
 		Files: files,
 	}
 
-	encryptAndPost(server, "/api/diff", payload, passphrase)
+	encryptAndPost(server, "/api/diff", payload, passphrase, ttlFlag)
 }
 
 func runGitStaged(args []string) {
-	serverFlag, passFlag, _ := parseFlags(args)
+	serverFlag, passFlag, ttlFlag, _ := parseFlags(args)
 	server, err := resolveServer(serverFlag)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -265,11 +301,11 @@ func runGitStaged(args []string) {
 		Files: files,
 	}
 
-	encryptAndPost(server, "/api/diff", payload, passphrase)
+	encryptAndPost(server, "/api/diff", payload, passphrase, ttlFlag)
 }
 
 func runFiles(args []string) {
-	serverFlag, passFlag, paths := parseFlags(args)
+	serverFlag, passFlag, ttlFlag, paths := parseFlags(args)
 	server, err := resolveServer(serverFlag)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -300,7 +336,7 @@ func runFiles(args []string) {
 	}
 
 	payload := FilesPayload{Files: files}
-	encryptAndPost(server, "/api/files", payload, passphrase)
+	encryptAndPost(server, "/api/files", payload, passphrase, ttlFlag)
 }
 
 func runKeyGen(args []string) {

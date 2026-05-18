@@ -8,7 +8,7 @@ Single binary, SQLite storage, zero external dependencies. All content is encryp
 
 1. **Encrypt locally** — diffs and files are encrypted with AES-256-GCM on your machine before upload. The server never sees plaintext.
 2. **Share a link** — get a URL like `your-server.com/p/ABC123`. Recipients need the passphrase to decrypt.
-3. **Auto-expiry** — all content expires after 24 hours.
+3. **Auto-expiry** — all content expires after 7 days by default; upload commands can override TTL.
 
 ## Quick start
 
@@ -40,6 +40,10 @@ agentgate git-staged
 
 # Share arbitrary files
 agentgate files src/foo.ts src/bar.ts
+
+# Share with custom TTL
+agentgate files -t 24h src/foo.ts
+agentgate files -t 7d src/foo.ts
 ```
 
 ## CLI commands
@@ -52,7 +56,7 @@ agentgate files src/foo.ts src/bar.ts
 | `agentgate git-staged` | Encrypt & share staged changes |
 | `agentgate files <paths...>` | Encrypt & share file contents |
 
-All upload commands accept `-s, --server <url>` and `-p, --passphrase <key>` flags.
+All upload commands accept `-s, --server <url>`, `-p, --passphrase <key>`, and `-t, --ttl <duration>` flags. TTL examples: `30m`, `24h`, `7d`.
 
 ## CLI environment variables
 
@@ -60,6 +64,7 @@ All upload commands accept `-s, --server <url>` and `-p, --passphrase <key>` fla
 |-----|------|-------------|
 | `AGENTGATE_SERVER` | `-s, --server` | Server URL (required) |
 | `AGENTGATE_PASSPHRASE` | `-p, --passphrase` | Encryption passphrase |
+| — | `-t, --ttl` | Optional share lifetime, e.g. `24h`, `7d`, `30m`. Default: `7d` |
 
 ## Server options
 
@@ -108,7 +113,7 @@ WantedBy=multi-user.target
 - **PBKDF2-SHA256** key derivation with 600,000 iterations
 - Client-side encryption only — the server stores ciphertext
 - Passphrase shared out-of-band by you
-- All content auto-expires after 24 hours
+- All content auto-expires after 7 days by default, with per-upload TTL override
 
 ## Tech stack
 

@@ -9,6 +9,8 @@ import (
 	"github.com/siygle/agentgate/internal/id"
 )
 
+const defaultExpiry = 7 * 24 * time.Hour
+
 // createRequest is the JSON body for both diff and file-bundle creation.
 type createRequest struct {
 	EncryptedData struct {
@@ -16,6 +18,7 @@ type createRequest struct {
 		IV         string `json:"iv"`
 		Salt       string `json:"salt"`
 	} `json:"encrypted_data"`
+	ExpiresInSeconds int64 `json:"expires_in_seconds,omitempty"`
 }
 
 type apiResponse struct {
@@ -58,7 +61,7 @@ func (s *Server) handleCreateDiff(w http.ResponseWriter, r *http.Request) {
 	}
 
 	newID := id.Generate()
-	expiry := time.Now().Add(24 * time.Hour)
+	expiry := time.Now().Add(resolveExpiry(req.ExpiresInSeconds))
 
 	if err := db.CreateDiff(s.db, newID, string(encJSON), expiry); err != nil {
 		writeJSON(w, http.StatusInternalServerError, apiResponse{
@@ -106,7 +109,7 @@ func (s *Server) handleCreateFiles(w http.ResponseWriter, r *http.Request) {
 	}
 
 	newID := id.Generate()
-	expiry := time.Now().Add(24 * time.Hour)
+	expiry := time.Now().Add(resolveExpiry(req.ExpiresInSeconds))
 
 	if err := db.CreateFileBundle(s.db, newID, string(encJSON), expiry); err != nil {
 		writeJSON(w, http.StatusInternalServerError, apiResponse{
@@ -123,6 +126,13 @@ func (s *Server) handleCreateFiles(w http.ResponseWriter, r *http.Request) {
 			ID:         newID,
 		},
 	})
+}
+
+func resolveExpiry(expiresInSeconds int64) time.Duration {
+	if expiresInSeconds <= 0 {
+		return defaultExpiry
+	}
+	return time.Duration(expiresInSeconds) * time.Second
 }
 
 // writeJSON encodes v as JSON and writes it with the given status code.
