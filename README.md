@@ -9,6 +9,17 @@ Single binary, SQLite storage, zero external dependencies. All content is encryp
 1. **Encrypt locally** — diffs and files are encrypted with AES-256-GCM on your machine before upload. The server never sees plaintext.
 2. **Share a link** — get a URL like `your-server.com/p/ABC123`. Recipients need the passphrase to decrypt.
 3. **Auto-expiry** — all content expires after 7 days by default; upload commands can override TTL.
+4. **Owner controls** — every new upload also returns a private Manage URL with an owner token. Open it to toggle whether a share should be kept indefinitely.
+
+## Features
+
+- End-to-end encrypted diff and file sharing
+- Local CLI for sharing latest commits, staged changes, or arbitrary files
+- Configurable TTL per upload (`30m`, `24h`, `7d`, etc.)
+- `--no-expiry` uploads for shares that should be preserved from the start
+- Private Manage URL (`#owner=...`) for toggling indefinite retention after upload
+- Expiry badges in the web UI, including a preserved/permanent state
+- Markdown rendering for shared `.md` files
 
 ## Quick start
 
@@ -44,6 +55,9 @@ agentgate files src/foo.ts src/bar.ts
 # Share with custom TTL
 agentgate files -t 24h src/foo.ts
 agentgate files -t 7d src/foo.ts
+
+# Share without expiry
+agentgate files --no-expiry src/foo.ts
 ```
 
 ## CLI commands
@@ -56,7 +70,18 @@ agentgate files -t 7d src/foo.ts
 | `agentgate git-staged` | Encrypt & share staged changes |
 | `agentgate files <paths...>` | Encrypt & share file contents |
 
-All upload commands accept `-s, --server <url>`, `-p, --passphrase <key>`, and `-t, --ttl <duration>` flags. TTL examples: `30m`, `24h`, `7d`.
+All upload commands accept `-s, --server <url>`, `-p, --passphrase <key>`, `-t, --ttl <duration>`, and `--no-expiry` flags. TTL examples: `30m`, `24h`, `7d`.
+
+`--no-expiry` is mutually exclusive with `-t/--ttl`.
+
+Successful uploads print both a public Preview URL and, on supported servers, a private Manage URL:
+
+```text
+Preview URL: https://your-domain.com/f/ABC123
+Manage URL:  https://your-domain.com/f/ABC123#owner=<owner-token>
+```
+
+Keep the Manage URL private. Anyone with this URL can toggle indefinite retention for that share.
 
 ## CLI environment variables
 
@@ -65,6 +90,28 @@ All upload commands accept `-s, --server <url>`, `-p, --passphrase <key>`, and `
 | `AGENTGATE_SERVER` | `-s, --server` | Server URL (required) |
 | `AGENTGATE_PASSPHRASE` | `-p, --passphrase` | Encryption passphrase |
 | — | `-t, --ttl` | Optional share lifetime, e.g. `24h`, `7d`, `30m`. Default: `7d` |
+| — | `--no-expiry` | Create the share with indefinite retention enabled |
+
+## Managing expiry
+
+AgentGate creates an owner token for each new share and stores only its SHA-256 hash server-side. The token is returned once as part of the Manage URL fragment:
+
+```text
+https://your-domain.com/f/ABC123#owner=<owner-token>
+```
+
+When this URL is opened in the browser, the page shows a **永久保留** toggle. Turning it on sets the share to never expire; turning it off restores normal expiration. If the previous deadline is already in the past, the server resets expiration to the default 7 days.
+
+The same operation is available through authenticated PATCH endpoints:
+
+```bash
+curl -X PATCH https://your-domain.com/api/files/ABC123 \
+  -H "Authorization: Bearer <owner-token>" \
+  -H "Content-Type: application/json" \
+  -d '{"never_expires":true}'
+```
+
+Use `/api/diff/{id}` for diff shares and `/api/files/{id}` for file shares.
 
 ## Server options
 
@@ -113,7 +160,9 @@ WantedBy=multi-user.target
 - **PBKDF2-SHA256** key derivation with 600,000 iterations
 - Client-side encryption only — the server stores ciphertext
 - Passphrase shared out-of-band by you
-- All content auto-expires after 7 days by default, with per-upload TTL override
+- Owner tokens are returned once and stored only as SHA-256 hashes
+- Manage URLs use URL fragments (`#owner=...`), so owner tokens are not sent to the server during normal page loads
+- All content auto-expires after 7 days by default, with per-upload TTL override or explicit no-expiry mode
 
 ## Tech stack
 
