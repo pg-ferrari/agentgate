@@ -52,6 +52,9 @@ agentgate git-staged
 # Share arbitrary files
 agentgate files src/foo.ts src/bar.ts
 
+# Share a runnable static webapp (a directory containing index.html)
+agentgate webapp ./dist
+
 # Share with custom TTL
 agentgate files -t 24h src/foo.ts
 agentgate files -t 7d src/foo.ts
@@ -69,10 +72,23 @@ agentgate files --no-expiry src/foo.ts
 | `agentgate git-latest` | Encrypt & share the latest commit diff |
 | `agentgate git-staged` | Encrypt & share staged changes |
 | `agentgate files <paths...>` | Encrypt & share file contents |
+| `agentgate webapp <dir>` | Encrypt & share a runnable static webapp |
 
 All upload commands accept `-s, --server <url>`, `-p, --passphrase <key>`, `-t, --ttl <duration>`, and `--no-expiry` flags. TTL examples: `30m`, `24h`, `7d`.
 
 `--no-expiry` is mutually exclusive with `-t/--ttl`.
+
+## Sharing a webapp
+
+`agentgate webapp <dir>` encrypts a directory of static files (the same end-to-end encryption as `files`) and returns an **App URL** at `/app/{id}`. After the recipient enters the passphrase, the bundle is decrypted in the browser, assembled into a single self-contained page, and run inside a sandboxed `<iframe>`.
+
+The directory must contain `index.html` at its root. Referenced local stylesheets and scripts (`<link href>`, `<script src>`) are inlined; local `<img>`/SVG references become data URIs.
+
+Limitations (this is for sharing runnable prototypes, not hosting a site):
+
+- **Text assets only.** HTML/CSS/JS/SVG survive; binary assets (PNG, fonts, etc.) are skipped with a warning — embed them as data URIs or external URLs.
+- **Opaque origin.** The iframe runs without `allow-same-origin`, so `localStorage`, cookies, and same-origin `fetch` are unavailable to the app by design.
+- The same record is also viewable as a plain file bundle at `/f/{id}`, and the Manage URL controls retention for both views.
 
 Successful uploads print both a public Preview URL and, on supported servers, a private Manage URL:
 

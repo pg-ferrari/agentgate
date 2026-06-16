@@ -86,3 +86,32 @@ func (s *Server) handleViewFiles(w http.ResponseWriter, r *http.Request) {
 	}
 	s.renderTemplate(w, "files.html", http.StatusOK, data)
 }
+
+// handleViewApp renders the webapp viewer page. It reads the same file_bundles
+// record as handleViewFiles; the bundle is assembled into a runnable page in a
+// sandboxed iframe client-side after decryption.
+func (s *Server) handleViewApp(w http.ResponseWriter, r *http.Request) {
+	bundleID := chi.URLParam(r, "id")
+
+	bundle, err := db.GetFileBundle(s.db, bundleID)
+	if err != nil {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	if bundle == nil || (!bundle.NeverExpires && bundle.ExpiredAt.Before(time.Now().UTC())) {
+		s.renderTemplate(w, "not_found.html", http.StatusNotFound, nil)
+		return
+	}
+
+	data := ViewPageData{
+		EncryptedData: bundle.EncryptedData,
+		NeverExpires:  bundle.NeverExpires,
+		ID:            bundle.ID,
+		Kind:          "files",
+	}
+	if !bundle.NeverExpires {
+		data.ExpiresAt = bundle.ExpiredAt.Format(time.RFC3339)
+	}
+	s.renderTemplate(w, "app.html", http.StatusOK, data)
+}

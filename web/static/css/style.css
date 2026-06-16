@@ -1229,3 +1229,22 @@ a:hover {
 .code-content code {
   font-family: inherit;
 }
+
+/* --- Webapp viewer --- */
+.app-viewer {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.app-frame {
+  flex: 1 1 auto;
+  width: 100%;
+  border: none;
+  background: #fff;
+}
+
+.app-error {
+  padding: 2rem;
+  color: var(--fg);
+}

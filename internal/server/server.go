@@ -32,6 +32,7 @@ func New(db *sql.DB, baseURL string, templateFS, staticFS fs.FS) *Server {
 		"index.html":     parsePageTemplate(templateFS, "index.html"),
 		"diff.html":      parsePageTemplate(templateFS, "diff.html"),
 		"files.html":     parsePageTemplate(templateFS, "files.html"),
+		"app.html":       parsePageTemplate(templateFS, "app.html"),
 		"not_found.html": parsePageTemplate(templateFS, "not_found.html"),
 	}
 
@@ -59,6 +60,7 @@ func New(db *sql.DB, baseURL string, templateFS, staticFS fs.FS) *Server {
 	r.Get("/llms-full.txt", s.handleLLMsFullTxt)
 	r.Get("/p/{id}", s.handleViewDiff)
 	r.Get("/f/{id}", s.handleViewFiles)
+	r.Get("/app/{id}", s.handleViewApp)
 
 	// API
 	r.Post("/api/diff", s.handleCreateDiff)

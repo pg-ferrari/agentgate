@@ -59,6 +59,8 @@ func main() {
 		runGitStaged(args)
 	case "files":
 		runFiles(args)
+	case "webapp":
+		runWebapp(args)
 	case "key-gen":
 		runKeyGen(args)
 	case "key-get":
@@ -77,6 +79,7 @@ Commands:
   git-latest  [-s server] [-p passphrase] [-t ttl|--no-expiry]              Share the latest commit diff
   git-staged  [-s server] [-p passphrase] [-t ttl|--no-expiry]              Share staged changes
   files       [-s server] [-p passphrase] [-t ttl|--no-expiry] <paths...>   Share files
+  webapp      [-s server] [-p passphrase] [-t ttl|--no-expiry] <dir>         Share a runnable static webapp
   key-gen     [key]                                                         Generate or set a passphrase
   key-get                                                                   Print current passphrase
 
@@ -205,6 +208,10 @@ func extractFilename(patch string) string {
 }
 
 func encryptAndPost(server, endpoint string, payload any, passphrase, ttl string, noExpiry bool) {
+	encryptAndPostMode(server, endpoint, payload, passphrase, ttl, noExpiry, false)
+}
+
+func encryptAndPostMode(server, endpoint string, payload any, passphrase, ttl string, noExpiry, asApp bool) {
 	if noExpiry && ttl != "" {
 		fmt.Fprintln(os.Stderr, "error: --no-expiry cannot be combined with -t/--ttl")
 		os.Exit(1)
@@ -251,13 +258,13 @@ func encryptAndPost(server, endpoint string, payload any, passphrase, ttl string
 	defer resp.Body.Close()
 
 	respBody, _ := io.ReadAll(resp.Body)
-	printCreateResponse(respBody)
+	printCreateResponse(respBody, asApp)
 }
 
 // printCreateResponse decodes the server response and, when successful,
 // prints a friendly summary including the manage URL. Falls back to raw
 // output on parse failure so debugging stays possible.
-func printCreateResponse(body []byte) {
+func printCreateResponse(body []byte, asApp bool) {
 	var parsed struct {
 		Success bool `json:"success"`
 		Data    struct {
@@ -276,7 +283,12 @@ func printCreateResponse(body []byte) {
 		fmt.Fprintf(os.Stderr, "server error: %s\n", parsed.Error)
 		os.Exit(1)
 	}
-	fmt.Printf("Preview URL: %s\n", parsed.Data.PreviewURL)
+	if asApp {
+		appURL := strings.Replace(parsed.Data.PreviewURL, "/f/", "/app/", 1)
+		fmt.Printf("App URL:     %s\n", appURL)
+	} else {
+		fmt.Printf("Preview URL: %s\n", parsed.Data.PreviewURL)
+	}
 	if parsed.Data.ManageURL != "" {
 		fmt.Printf("Manage URL:  %s\n", parsed.Data.ManageURL)
 		fmt.Println("(Keep the Manage URL private — it lets you toggle indefinite retention on this share.)")
@@ -378,6 +390,91 @@ func runFiles(args []string) {
 
 	payload := FilesPayload{Files: files}
 	encryptAndPost(server, "/api/files", payload, passphrase, ttlFlag, noExpiry)
+}
+
+// binaryExt lists extensions whose raw bytes do not survive being stored as a
+// UTF-8 string in the bundle. They are skipped (with a warning) by runWebapp.
+var binaryExt = map[string]bool{
+	".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".webp": true,
+	".ico": true, ".bmp": true, ".woff": true, ".woff2": true, ".ttf": true,
+	".otf": true, ".eot": true, ".mp3": true, ".mp4": true, ".webm": true,
+	".wav": true, ".pdf": true, ".zip": true, ".wasm": true,
+}
+
+func runWebapp(args []string) {
+	serverFlag, passFlag, ttlFlag, noExpiry, paths := parseFlags(args)
+	server, err := resolveServer(serverFlag)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	passphrase, err := resolvePassphrase(passFlag)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+
+	if len(paths) != 1 {
+		fmt.Fprintln(os.Stderr, "error: webapp takes exactly one directory")
+		os.Exit(1)
+	}
+	root := paths[0]
+	info, err := os.Stat(root)
+	if err != nil || !info.IsDir() {
+		fmt.Fprintf(os.Stderr, "error: %q is not a directory\n", root)
+		os.Exit(1)
+	}
+
+	var files []FilesPayloadFile
+	hasIndex := false
+	err = filepath.Walk(root, func(p string, fi os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		base := filepath.Base(p)
+		if fi.IsDir() {
+			if p != root && strings.HasPrefix(base, ".") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasPrefix(base, ".") {
+			return nil
+		}
+		if binaryExt[strings.ToLower(filepath.Ext(p))] {
+			fmt.Fprintf(os.Stderr, "warning: skipping binary asset %s (embed it as a data URI or external URL instead)\n", p)
+			return nil
+		}
+		rel, err := filepath.Rel(root, p)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		if rel == "index.html" {
+			hasIndex = true
+		}
+		files = append(files, FilesPayloadFile{Title: rel, Content: string(data)})
+		return nil
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error reading %s: %v\n", root, err)
+		os.Exit(1)
+	}
+	if len(files) == 0 {
+		fmt.Fprintln(os.Stderr, "error: no usable files found")
+		os.Exit(1)
+	}
+	if !hasIndex {
+		fmt.Fprintln(os.Stderr, "error: no index.html at the root of the directory")
+		os.Exit(1)
+	}
+
+	payload := FilesPayload{Files: files}
+	encryptAndPostMode(server, "/api/files", payload, passphrase, ttlFlag, noExpiry, true)
 }
 
 func runKeyGen(args []string) {
