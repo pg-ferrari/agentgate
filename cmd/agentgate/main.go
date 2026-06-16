@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -258,13 +259,38 @@ func encryptAndPostMode(server, endpoint string, payload any, passphrase, ttl st
 	defer resp.Body.Close()
 
 	respBody, _ := io.ReadAll(resp.Body)
-	printCreateResponse(respBody, asApp)
+	printCreateResponse(respBody, server, asApp)
+}
+
+// rebaseURL rewrites the scheme/host of rawURL to match the server the request
+// was sent to, but only when the server reports a loopback host. This keeps
+// printed links usable when the server's --base-url is left at its localhost
+// default while still being reached over a public address.
+func rebaseURL(rawURL, server string) string {
+	if rawURL == "" {
+		return rawURL
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	host := u.Hostname()
+	if host != "localhost" && host != "127.0.0.1" && host != "::1" {
+		return rawURL
+	}
+	s, err := url.Parse(server)
+	if err != nil || s.Host == "" {
+		return rawURL
+	}
+	u.Scheme = s.Scheme
+	u.Host = s.Host
+	return u.String()
 }
 
 // printCreateResponse decodes the server response and, when successful,
 // prints a friendly summary including the manage URL. Falls back to raw
 // output on parse failure so debugging stays possible.
-func printCreateResponse(body []byte, asApp bool) {
+func printCreateResponse(body []byte, server string, asApp bool) {
 	var parsed struct {
 		Success bool `json:"success"`
 		Data    struct {
@@ -283,14 +309,16 @@ func printCreateResponse(body []byte, asApp bool) {
 		fmt.Fprintf(os.Stderr, "server error: %s\n", parsed.Error)
 		os.Exit(1)
 	}
+	previewURL := rebaseURL(parsed.Data.PreviewURL, server)
+	manageURL := rebaseURL(parsed.Data.ManageURL, server)
 	if asApp {
-		appURL := strings.Replace(parsed.Data.PreviewURL, "/f/", "/app/", 1)
+		appURL := strings.Replace(previewURL, "/f/", "/app/", 1)
 		fmt.Printf("App URL:     %s\n", appURL)
 	} else {
-		fmt.Printf("Preview URL: %s\n", parsed.Data.PreviewURL)
+		fmt.Printf("Preview URL: %s\n", previewURL)
 	}
-	if parsed.Data.ManageURL != "" {
-		fmt.Printf("Manage URL:  %s\n", parsed.Data.ManageURL)
+	if manageURL != "" {
+		fmt.Printf("Manage URL:  %s\n", manageURL)
 		fmt.Println("(Keep the Manage URL private — it lets you toggle indefinite retention on this share.)")
 	}
 }

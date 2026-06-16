@@ -99,6 +99,8 @@ Manage URL:  https://your-domain.com/f/ABC123#owner=<owner-token>
 
 Keep the Manage URL private. Anyone with this URL can toggle indefinite retention for that share.
 
+If the server returns a `localhost`/`127.0.0.1` link (because its `--base-url` was left at the default) the CLI rewrites the scheme and host to match the `-s`/`AGENTGATE_SERVER` address you uploaded to, so the printed links stay usable.
+
 ## CLI environment variables
 
 | Env | Flag | Description |
