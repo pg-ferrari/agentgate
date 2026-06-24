@@ -19,6 +19,11 @@
     return el.getAttribute("data-value") || "";
   }
 
+  function getShareId() {
+    var el = document.getElementById("share-meta");
+    return el ? el.getAttribute("data-id") || "unknown" : "unknown";
+  }
+
   function fileMap(files) {
     var map = {};
     (files || []).forEach(function (f) {
@@ -52,24 +57,29 @@
   }
 
   function renderMarkdown(markdown) {
-    if (window.AgentGateMarkdown) {
-      return window.AgentGateMarkdown.renderMarkdown(markdown || "");
-    }
-    if (typeof marked !== "undefined") {
-      return marked.parse(markdown || "");
-    }
+    if (window.AgentGateMarkdown) return window.AgentGateMarkdown.renderMarkdown(markdown || "");
+    if (typeof marked !== "undefined") return marked.parse(markdown || "");
     return "<pre>" + escapeHtml(markdown || "") + "</pre>";
   }
 
   function attachCodeHighlight(container) {
     if (!container || typeof hljs === "undefined") return;
     var blocks = container.querySelectorAll("pre code");
-    for (var i = 0; i < blocks.length; i++) {
-      hljs.highlightElement(blocks[i]);
+    for (var i = 0; i < blocks.length; i++) hljs.highlightElement(blocks[i]);
+  }
+
+  function renderMermaid(container) {
+    if (!container || typeof mermaid === "undefined") return;
+    try {
+      mermaid.initialize({ startOnLoad: false, theme: window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "default" });
+      var nodes = container.querySelectorAll(".mermaid");
+      if (nodes.length) mermaid.run({ nodes: nodes });
+    } catch (e) {
+      console.warn("Mermaid render failed", e);
     }
   }
 
-  function createFileTree(files, entry) {
+  function createFileTree(files, active, onSelect) {
     var wrap = document.createElement("aside");
     wrap.className = "plan-sidebar";
     var title = document.createElement("h2");
@@ -79,12 +89,88 @@
     list.className = "plan-file-tree";
     (files || []).forEach(function (f) {
       var li = document.createElement("li");
-      li.textContent = f.title || "untitled";
-      if ((f.title || "") === entry) li.className = "active";
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = f.title || "untitled";
+      if ((f.title || "") === active) btn.className = "active";
+      btn.addEventListener("click", function () { onSelect(f); });
+      li.appendChild(btn);
       list.appendChild(li);
     });
     wrap.appendChild(list);
     return wrap;
+  }
+
+  function feedbackKey() {
+    return "agentgate-plan-feedback-" + getShareId();
+  }
+
+  function loadFeedback() {
+    try { return JSON.parse(localStorage.getItem(feedbackKey()) || "[]"); } catch (e) { return []; }
+  }
+
+  function saveFeedback(items) {
+    try { localStorage.setItem(feedbackKey(), JSON.stringify(items)); } catch (e) {}
+  }
+
+  function createFeedbackPanel(titleText) {
+    var aside = document.createElement("aside");
+    aside.className = "plan-feedback";
+    aside.innerHTML = '<h2>Chat / Feedback</h2><p class="plan-feedback-hint">Local-only notes for now. Copy them back to your agent after review.</p>';
+
+    var list = document.createElement("div");
+    list.className = "plan-feedback-list";
+    var items = loadFeedback();
+
+    function redraw() {
+      list.innerHTML = "";
+      items.forEach(function (item, idx) {
+        var div = document.createElement("div");
+        div.className = "plan-feedback-item";
+        div.innerHTML = '<div class="plan-feedback-meta">#' + (idx + 1) + ' · ' + escapeHtml(item.created_at) + '</div><div></div>';
+        div.lastChild.textContent = item.text;
+        list.appendChild(div);
+      });
+    }
+
+    var ta = document.createElement("textarea");
+    ta.className = "form-input plan-feedback-input";
+    ta.placeholder = "Leave feedback, questions, or change requests...";
+    ta.rows = 5;
+
+    var actions = document.createElement("div");
+    actions.className = "plan-feedback-actions";
+    var add = document.createElement("button");
+    add.type = "button";
+    add.className = "btn btn-primary";
+    add.textContent = "Add";
+    add.addEventListener("click", function () {
+      var text = (ta.value || "").trim();
+      if (!text) return;
+      items.push({ text: text, created_at: new Date().toLocaleString() });
+      saveFeedback(items);
+      ta.value = "";
+      redraw();
+    });
+
+    var copy = document.createElement("button");
+    copy.type = "button";
+    copy.className = "btn";
+    copy.textContent = "Copy for agent";
+    copy.addEventListener("click", function () {
+      var text = "Feedback for visual plan: " + titleText + "\n\n" + items.map(function (item, i) { return (i + 1) + ". " + item.text; }).join("\n");
+      if (navigator.clipboard) navigator.clipboard.writeText(text);
+      copy.textContent = "Copied";
+      setTimeout(function () { copy.textContent = "Copy for agent"; }, 1200);
+    });
+
+    actions.appendChild(add);
+    actions.appendChild(copy);
+    aside.appendChild(list);
+    aside.appendChild(ta);
+    aside.appendChild(actions);
+    redraw();
+    return aside;
   }
 
   function renderPlanViewer(data, expiresAt) {
@@ -111,9 +197,7 @@
     headerLeft.appendChild(label);
 
     var meta = window.AgentGateExpiry ? window.AgentGateExpiry.getShareMeta() : null;
-    var badgeHandle = window.AgentGateExpiry
-      ? window.AgentGateExpiry.createExpiryBadge(expiresAt, meta && meta.neverExpires)
-      : null;
+    var badgeHandle = window.AgentGateExpiry ? window.AgentGateExpiry.createExpiryBadge(expiresAt, meta && meta.neverExpires) : null;
     if (badgeHandle) headerLeft.appendChild(badgeHandle.node);
 
     var headerRight = document.createElement("div");
@@ -126,9 +210,7 @@
       var toggle = window.AgentGateExpiry.createOwnerToggle(meta, badgeHandle);
       if (toggle) headerRight.appendChild(toggle);
     }
-    if (window.AgentGateSettings) {
-      window.AgentGateSettings.renderSettingsPanel(headerRight);
-    }
+    if (window.AgentGateSettings) window.AgentGateSettings.renderSettingsPanel(headerRight);
 
     headerEl.appendChild(headerLeft);
     headerEl.appendChild(headerRight);
@@ -136,17 +218,27 @@
 
     var body = document.createElement("div");
     body.className = "plan-layout";
-    if (files.length > 1) body.appendChild(createFileTree(files, entry.title));
 
     var article = document.createElement("article");
     article.className = "markdown-body plan-document";
-    article.innerHTML = renderMarkdown(entry.content || "");
-    attachCodeHighlight(article);
+
+    function renderFile(file) {
+      entry = file;
+      article.innerHTML = renderMarkdown(file.content || "");
+      attachCodeHighlight(article);
+      renderMermaid(article);
+      var buttons = body.querySelectorAll(".plan-file-tree button");
+      for (var i = 0; i < buttons.length; i++) buttons[i].classList.toggle("active", buttons[i].textContent === file.title);
+    }
+
+    if (files.length > 1) body.appendChild(createFileTree(files, entry.title, renderFile));
     body.appendChild(article);
+    body.appendChild(createFeedbackPanel(titleText));
     viewer.appendChild(body);
 
     app.innerHTML = "";
     app.appendChild(viewer);
+    renderFile(entry);
   }
 
   function attemptDecrypt(passphrase, remember) {
@@ -178,9 +270,6 @@
     if (!P) return;
     var stored = P.getStoredPassphrase();
     if (stored) {
-      // Keep the dialog visible while trying the remembered passphrase. If it
-      // belongs to another share, the user can immediately replace it instead
-      // of seeing a blank page.
       P.showPassphraseDialog(attemptDecrypt, { isDecrypting: true });
       attemptDecrypt(stored, true);
     } else {
@@ -188,9 +277,6 @@
     }
   }
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", init);
-  } else {
-    init();
-  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
+  else init();
 })();

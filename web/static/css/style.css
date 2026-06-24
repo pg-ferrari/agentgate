@@ -1344,3 +1344,89 @@ a:hover {
     grid-template-columns: 260px minmax(0, 1fr);
   }
 }
+
+.plan-file-tree button {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  font: inherit;
+  padding: 0.25rem 0.4rem;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.plan-file-tree button:hover,
+.plan-file-tree button.active {
+  background: var(--bg-tertiary);
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.plan-feedback {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1rem;
+  align-self: start;
+}
+
+.plan-feedback h2 {
+  margin-bottom: 0.5rem;
+  font-size: 0.95rem;
+}
+
+.plan-feedback-hint {
+  margin-bottom: 0.75rem;
+  font-size: 0.8125rem;
+}
+
+.plan-feedback-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.plan-feedback-item {
+  padding: 0.625rem;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  font-size: 0.875rem;
+  white-space: pre-wrap;
+}
+
+.plan-feedback-meta {
+  color: var(--fg-subtle);
+  font-size: 0.75rem;
+  margin-bottom: 0.25rem;
+}
+
+.plan-feedback-input {
+  resize: vertical;
+  min-height: 8rem;
+}
+
+.plan-feedback-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.plan-document .mermaid {
+  margin: 1rem 0;
+  padding: 1rem;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg);
+  overflow: auto;
+}
+
+@media (min-width: 1180px) {
+  .plan-layout {
+    grid-template-columns: 260px minmax(0, 1fr) 300px;
+  }
+}

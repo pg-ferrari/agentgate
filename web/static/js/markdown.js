@@ -31,6 +31,9 @@
         code: function (token) {
           var lang = token.lang;
           var code = token.text;
+          if ((lang || "").toLowerCase() === "mermaid") {
+            return '<div class="mermaid">' + code.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") + "</div>";
+          }
           var highlighted;
           if (
             lang &&
