@@ -575,7 +575,10 @@ func runPlan(args []string) {
 			if err != nil {
 				return err
 			}
-			if entry == "" && (rel == "plan.mdx" || rel == "plan.md" || strings.HasSuffix(strings.ToLower(rel), ".mdx") || strings.HasSuffix(strings.ToLower(rel), ".md")) {
+			lowerRel := strings.ToLower(rel)
+			if lowerRel == "plan.mdx" || lowerRel == "plan.md" || lowerRel == "readme.mdx" || lowerRel == "readme.md" {
+				entry = rel
+			} else if entry == "" && (strings.HasSuffix(lowerRel, ".mdx") || strings.HasSuffix(lowerRel, ".md")) {
 				entry = rel
 			}
 			files = append(files, FilesPayloadFile{Title: rel, Content: string(data)})
