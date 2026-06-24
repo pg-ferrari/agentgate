@@ -1495,3 +1495,22 @@ a:hover {
   border: 0;
   background: #fff;
 }
+
+.plan-layout.no-sidebar {
+  display: block;
+  max-width: 980px;
+}
+
+.plan-layout.no-sidebar .plan-document {
+  width: 100%;
+}
+
+.plan-layout.docs-mode {
+  padding-top: 1.5rem;
+}
+
+@media (min-width: 1180px) {
+  .plan-layout.no-sidebar {
+    max-width: 980px;
+  }
+}

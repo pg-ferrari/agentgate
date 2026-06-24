@@ -290,6 +290,8 @@
 
     var body = document.createElement("div");
     body.className = "plan-layout";
+    if (files.length <= 1) body.classList.add("no-sidebar");
+    if (!isVisualPlan) body.classList.add("docs-mode");
 
     var article = document.createElement("article");
     article.className = "markdown-body plan-document";
