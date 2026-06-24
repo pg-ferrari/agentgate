@@ -31,8 +31,12 @@
         code: function (token) {
           var lang = token.lang;
           var code = token.text;
-          if ((lang || "").toLowerCase() === "mermaid") {
+          var normalizedLang = (lang || "").toLowerCase();
+          if (normalizedLang === "mermaid") {
             return '<div class="mermaid">' + code.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") + "</div>";
+          }
+          if (normalizedLang === "wireframe" || normalizedLang === "html-wireframe") {
+            return '<div class="plan-wireframe-source" data-wireframe="' + encodeURIComponent(code).replace(/"/g, "%22") + '"></div>';
           }
           var highlighted;
           if (

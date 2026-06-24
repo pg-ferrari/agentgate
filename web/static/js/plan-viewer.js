@@ -79,6 +79,52 @@
     }
   }
 
+  function wireframeSrcdoc(html) {
+    var css = "<style>" +
+      "html,body{margin:0;background:#fff;color:#111;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}" +
+      "body{padding:16px;box-sizing:border-box;}" +
+      "button,.btn{border:1px solid #c8d0d9;border-radius:8px;background:#f6f8fa;padding:7px 12px;font:inherit;}" +
+      "button.primary,.primary{background:#0969da;color:#fff;border-color:#0969da;}" +
+      ".wf-card,.card{border:1px solid #d8dee4;border-radius:12px;background:#fff;padding:14px;box-shadow:0 1px 2px rgba(0,0,0,.04);}" +
+      ".wf-box,.box{border:1px dashed #aeb8c2;border-radius:10px;background:#f6f8fa;min-height:44px;padding:12px;display:flex;align-items:center;justify-content:center;color:#57606a;text-align:center;}" +
+      ".muted{color:#57606a}.row{display:flex;gap:12px;align-items:center}.col{display:flex;flex-direction:column;gap:12px}" +
+      "*{box-sizing:border-box}" +
+      "</style>";
+    return "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">" + css + "</head><body>" + html + "</body></html>";
+  }
+
+  function renderWireframes(container) {
+    if (!container) return;
+    var nodes = container.querySelectorAll(".plan-wireframe-source");
+    for (var i = 0; i < nodes.length; i++) {
+      (function (node) {
+        var raw = node.getAttribute("data-wireframe") || "";
+        var html = "";
+        try { html = decodeURIComponent(raw); } catch (e) { html = raw; }
+
+        var shell = document.createElement("div");
+        shell.className = "plan-wireframe";
+        var toolbar = document.createElement("div");
+        toolbar.className = "plan-wireframe-toolbar";
+        toolbar.innerHTML = '<span>Wireframe</span><button type="button" class="btn">Open preview</button>';
+        var frame = document.createElement("iframe");
+        frame.className = "plan-wireframe-frame";
+        frame.setAttribute("sandbox", "");
+        frame.setAttribute("srcdoc", wireframeSrcdoc(html));
+        toolbar.querySelector("button").addEventListener("click", function () {
+          var win = window.open("", "_blank", "noopener,noreferrer");
+          if (!win) return;
+          win.document.open();
+          win.document.write(wireframeSrcdoc(html));
+          win.document.close();
+        });
+        shell.appendChild(toolbar);
+        shell.appendChild(frame);
+        node.replaceWith(shell);
+      })(nodes[i]);
+    }
+  }
+
   function createFileTree(files, active, onSelect) {
     var wrap = document.createElement("aside");
     wrap.className = "plan-sidebar";
@@ -226,6 +272,7 @@
       entry = file;
       article.innerHTML = renderMarkdown(file.content || "");
       attachCodeHighlight(article);
+      renderWireframes(article);
       renderMermaid(article);
       var buttons = body.querySelectorAll(".plan-file-tree button");
       for (var i = 0; i < buttons.length; i++) buttons[i].classList.toggle("active", buttons[i].textContent === file.title);

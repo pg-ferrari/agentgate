@@ -1430,3 +1430,32 @@ a:hover {
     grid-template-columns: 260px minmax(0, 1fr) 300px;
   }
 }
+
+.plan-wireframe {
+  margin: 1rem 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.plan-wireframe-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.625rem 0.75rem;
+  border-bottom: 1px solid var(--border-light);
+  background: var(--bg-secondary);
+  color: var(--fg-muted);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.plan-wireframe-frame {
+  display: block;
+  width: 100%;
+  min-height: 420px;
+  border: 0;
+  background: #fff;
+}
