@@ -112,10 +112,21 @@
         frame.setAttribute("sandbox", "");
         frame.setAttribute("srcdoc", wireframeSrcdoc(html));
         toolbar.querySelector("button").addEventListener("click", function () {
-          var win = window.open("", "_blank", "noopener,noreferrer");
+          var doc = wireframeSrcdoc(html);
+          try {
+            var blob = new Blob([doc], { type: "text/html" });
+            var url = URL.createObjectURL(blob);
+            var opened = window.open(url, "_blank");
+            if (opened) {
+              setTimeout(function () { URL.revokeObjectURL(url); }, 30000);
+              return;
+            }
+            URL.revokeObjectURL(url);
+          } catch (e) {}
+          var win = window.open("", "_blank");
           if (!win) return;
           win.document.open();
-          win.document.write(wireframeSrcdoc(html));
+          win.document.write(doc);
           win.document.close();
         });
         shell.appendChild(toolbar);
@@ -161,8 +172,20 @@
 
   function createFeedbackPanel(titleText) {
     var aside = document.createElement("aside");
-    aside.className = "plan-feedback";
-    aside.innerHTML = '<h2>Chat / Feedback</h2><p class="plan-feedback-hint">Local-only notes for now. Copy them back to your agent after review.</p>';
+    aside.className = "plan-feedback collapsed";
+
+    var header = document.createElement("button");
+    header.type = "button";
+    header.className = "plan-feedback-toggle";
+    header.innerHTML = '<span>Chat / Feedback</span><span class="plan-feedback-chevron">▲</span>';
+    header.addEventListener("click", function () {
+      aside.classList.toggle("collapsed");
+    });
+    aside.appendChild(header);
+
+    var content = document.createElement("div");
+    content.className = "plan-feedback-content";
+    content.innerHTML = '<p class="plan-feedback-hint">Local-only notes for now. Copy them back to your agent after review.</p>';
 
     var list = document.createElement("div");
     list.className = "plan-feedback-list";
@@ -212,9 +235,10 @@
 
     actions.appendChild(add);
     actions.appendChild(copy);
-    aside.appendChild(list);
-    aside.appendChild(ta);
-    aside.appendChild(actions);
+    content.appendChild(list);
+    content.appendChild(ta);
+    content.appendChild(actions);
+    aside.appendChild(content);
     redraw();
     return aside;
   }
