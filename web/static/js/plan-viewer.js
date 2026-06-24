@@ -178,7 +178,11 @@
     if (!P) return;
     var stored = P.getStoredPassphrase();
     if (stored) {
-      attemptDecrypt(stored, false);
+      // Keep the dialog visible while trying the remembered passphrase. If it
+      // belongs to another share, the user can immediately replace it instead
+      // of seeing a blank page.
+      P.showPassphraseDialog(attemptDecrypt, { isDecrypting: true });
+      attemptDecrypt(stored, true);
     } else {
       P.showPassphraseDialog(attemptDecrypt);
     }

@@ -63,6 +63,11 @@ func New(db *sql.DB, baseURL string, templateFS, staticFS fs.FS) *Server {
 	r.Get("/f/{id}", s.handleViewFiles)
 	r.Get("/app/{id}", s.handleViewApp)
 	r.Get("/plan/{id}", s.handleViewPlan)
+	// Some chat/mobile clients probe shared URLs with HEAD before opening them.
+	r.Head("/p/{id}", s.handleViewDiff)
+	r.Head("/f/{id}", s.handleViewFiles)
+	r.Head("/app/{id}", s.handleViewApp)
+	r.Head("/plan/{id}", s.handleViewPlan)
 
 	// API
 	r.Post("/api/diff", s.handleCreateDiff)
