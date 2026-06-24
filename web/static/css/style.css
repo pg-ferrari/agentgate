@@ -1248,3 +1248,99 @@ a:hover {
   padding: 2rem;
   color: var(--fg);
 }
+
+/* --- Visual plan viewer --- */
+.plan-viewer {
+  min-height: 100vh;
+  background: var(--bg-secondary);
+}
+
+.plan-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1rem;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 1.25rem;
+}
+
+.plan-sidebar {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1rem;
+  align-self: start;
+}
+
+.plan-sidebar h2 {
+  margin-bottom: 0.75rem;
+  font-size: 0.95rem;
+}
+
+.plan-file-tree {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  color: var(--fg-muted);
+}
+
+.plan-file-tree li {
+  padding: 0.25rem 0.4rem;
+  border-radius: 6px;
+  overflow-wrap: anywhere;
+}
+
+.plan-file-tree li.active {
+  background: var(--bg-tertiary);
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.plan-document {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.5rem;
+  min-width: 0;
+}
+
+.plan-document h1,
+.plan-document h2,
+.plan-document h3 {
+  margin-top: 1.25rem;
+  margin-bottom: 0.75rem;
+}
+
+.plan-document h1:first-child,
+.plan-document h2:first-child,
+.plan-document h3:first-child {
+  margin-top: 0;
+}
+
+.plan-document p,
+.plan-document ul,
+.plan-document ol,
+.plan-document pre,
+.plan-document blockquote,
+.plan-document table {
+  margin-bottom: 1rem;
+}
+
+.plan-document pre {
+  padding: 1rem;
+  overflow: auto;
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+}
+
+@media (min-width: 900px) {
+  .plan-layout {
+    grid-template-columns: 260px minmax(0, 1fr);
+  }
+}

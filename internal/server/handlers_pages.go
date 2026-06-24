@@ -115,3 +115,32 @@ func (s *Server) handleViewApp(w http.ResponseWriter, r *http.Request) {
 	}
 	s.renderTemplate(w, "app.html", http.StatusOK, data)
 }
+
+// handleViewPlan renders an encrypted visual plan. It uses the same file_bundles
+// storage and owner controls as /f/{id}; decryption and rendering happen in the
+// browser so the server never sees the plan text.
+func (s *Server) handleViewPlan(w http.ResponseWriter, r *http.Request) {
+	bundleID := chi.URLParam(r, "id")
+
+	bundle, err := db.GetFileBundle(s.db, bundleID)
+	if err != nil {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	if bundle == nil || (!bundle.NeverExpires && bundle.ExpiredAt.Before(time.Now().UTC())) {
+		s.renderTemplate(w, "not_found.html", http.StatusNotFound, nil)
+		return
+	}
+
+	data := ViewPageData{
+		EncryptedData: bundle.EncryptedData,
+		NeverExpires:  bundle.NeverExpires,
+		ID:            bundle.ID,
+		Kind:          "files",
+	}
+	if !bundle.NeverExpires {
+		data.ExpiresAt = bundle.ExpiredAt.Format(time.RFC3339)
+	}
+	s.renderTemplate(w, "plan.html", http.StatusOK, data)
+}

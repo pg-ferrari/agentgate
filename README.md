@@ -55,6 +55,9 @@ agentgate files src/foo.ts src/bar.ts
 # Share a runnable static webapp (a directory containing index.html)
 agentgate webapp ./dist
 
+# Share an encrypted visual plan (plan.mdx / plan.md or a folder)
+agentgate plan ./plans/my-plan
+
 # Share with custom TTL
 agentgate files -t 24h src/foo.ts
 agentgate files -t 7d src/foo.ts
@@ -73,10 +76,17 @@ agentgate files --no-expiry src/foo.ts
 | `agentgate git-staged` | Encrypt & share staged changes |
 | `agentgate files <paths...>` | Encrypt & share file contents |
 | `agentgate webapp <dir>` | Encrypt & share a runnable static webapp |
+| `agentgate plan <file\|dir>` | Encrypt & share a visual plan bundle at `/plan/{id}` |
 
 All upload commands accept `-s, --server <url>`, `-p, --passphrase <key>`, `-t, --ttl <duration>`, and `--no-expiry` flags. TTL examples: `30m`, `24h`, `7d`.
 
 `--no-expiry` is mutually exclusive with `-t/--ttl`.
+
+## Sharing a visual plan
+
+`agentgate plan <file|dir>` encrypts a `plan.mdx`, `plan.md`, or plan folder and returns a **Plan URL** at `/plan/{id}`. After the recipient enters the passphrase, the bundle is decrypted in the browser and rendered as a reviewable Markdown/MDX-style visual plan.
+
+This first version is designed for Agent-Native-style `/visual-plan` output in local-files form: `plan.mdx` is used as the entry document when present, with a sidebar showing the rest of the bundled files. The server stores only encrypted data; plan text is never visible server-side.
 
 ## Sharing a webapp
 

@@ -44,6 +44,16 @@ type FilesPayloadFile struct {
 	Content string `json:"content"`
 }
 
+// PlanPayload is an encrypted visual plan bundle. It is stored through the
+// generic file-bundle API so the server still never sees plaintext content.
+type PlanPayload struct {
+	Kind        string             `json:"kind"`
+	Title       string             `json:"title"`
+	Entry       string             `json:"entry"`
+	Files       []FilesPayloadFile `json:"files"`
+	GeneratedAt string             `json:"generated_at"`
+}
+
 func main() {
 	if len(os.Args) < 2 {
 		printUsage()
@@ -62,6 +72,8 @@ func main() {
 		runFiles(args)
 	case "webapp":
 		runWebapp(args)
+	case "plan":
+		runPlan(args)
 	case "key-gen":
 		runKeyGen(args)
 	case "key-get":
@@ -81,6 +93,7 @@ Commands:
   git-staged  [-s server] [-p passphrase] [-t ttl|--no-expiry]              Share staged changes
   files       [-s server] [-p passphrase] [-t ttl|--no-expiry] <paths...>   Share files
   webapp      [-s server] [-p passphrase] [-t ttl|--no-expiry] <dir>         Share a runnable static webapp
+  plan        [-s server] [-p passphrase] [-t ttl|--no-expiry] <file|dir>    Share an encrypted visual plan
   key-gen     [key]                                                         Generate or set a passphrase
   key-get                                                                   Print current passphrase
 
@@ -209,10 +222,10 @@ func extractFilename(patch string) string {
 }
 
 func encryptAndPost(server, endpoint string, payload any, passphrase, ttl string, noExpiry bool) {
-	encryptAndPostMode(server, endpoint, payload, passphrase, ttl, noExpiry, false)
+	encryptAndPostMode(server, endpoint, payload, passphrase, ttl, noExpiry, "")
 }
 
-func encryptAndPostMode(server, endpoint string, payload any, passphrase, ttl string, noExpiry, asApp bool) {
+func encryptAndPostMode(server, endpoint string, payload any, passphrase, ttl string, noExpiry bool, displayMode string) {
 	if noExpiry && ttl != "" {
 		fmt.Fprintln(os.Stderr, "error: --no-expiry cannot be combined with -t/--ttl")
 		os.Exit(1)
@@ -259,7 +272,7 @@ func encryptAndPostMode(server, endpoint string, payload any, passphrase, ttl st
 	defer resp.Body.Close()
 
 	respBody, _ := io.ReadAll(resp.Body)
-	printCreateResponse(respBody, server, asApp)
+	printCreateResponse(respBody, server, displayMode)
 }
 
 // rebaseURL rewrites the scheme/host of rawURL to match the server the request
@@ -290,7 +303,7 @@ func rebaseURL(rawURL, server string) string {
 // printCreateResponse decodes the server response and, when successful,
 // prints a friendly summary including the manage URL. Falls back to raw
 // output on parse failure so debugging stays possible.
-func printCreateResponse(body []byte, server string, asApp bool) {
+func printCreateResponse(body []byte, server string, displayMode string) {
 	var parsed struct {
 		Success bool `json:"success"`
 		Data    struct {
@@ -311,12 +324,18 @@ func printCreateResponse(body []byte, server string, asApp bool) {
 	}
 	previewURL := rebaseURL(parsed.Data.PreviewURL, server)
 	manageURL := rebaseURL(parsed.Data.ManageURL, server)
-	if asApp {
-		appURL := strings.Replace(previewURL, "/f/", "/app/", 1)
-		fmt.Printf("App URL:     %s\n", appURL)
-	} else {
-		fmt.Printf("Preview URL: %s\n", previewURL)
+	label := "Preview URL"
+	switch displayMode {
+	case "app":
+		label = "App URL"
+		previewURL = strings.Replace(previewURL, "/f/", "/app/", 1)
+		manageURL = strings.Replace(manageURL, "/f/", "/app/", 1)
+	case "plan":
+		label = "Plan URL"
+		previewURL = strings.Replace(previewURL, "/f/", "/plan/", 1)
+		manageURL = strings.Replace(manageURL, "/f/", "/plan/", 1)
 	}
+	fmt.Printf("%-12s %s\n", label+":", previewURL)
 	if manageURL != "" {
 		fmt.Printf("Manage URL:  %s\n", manageURL)
 		fmt.Println("(Keep the Manage URL private — it lets you toggle indefinite retention on this share.)")
@@ -502,7 +521,96 @@ func runWebapp(args []string) {
 	}
 
 	payload := FilesPayload{Files: files}
-	encryptAndPostMode(server, "/api/files", payload, passphrase, ttlFlag, noExpiry, true)
+	encryptAndPostMode(server, "/api/files", payload, passphrase, ttlFlag, noExpiry, "app")
+}
+
+func runPlan(args []string) {
+	serverFlag, passFlag, ttlFlag, noExpiry, paths := parseFlags(args)
+	server, err := resolveServer(serverFlag)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	passphrase, err := resolvePassphrase(passFlag)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+
+	if len(paths) != 1 {
+		fmt.Fprintln(os.Stderr, "error: plan takes exactly one file or directory")
+		os.Exit(1)
+	}
+
+	root := paths[0]
+	info, err := os.Stat(root)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error reading %s: %v\n", root, err)
+		os.Exit(1)
+	}
+
+	var files []FilesPayloadFile
+	entry := ""
+	if info.IsDir() {
+		err = filepath.Walk(root, func(p string, fi os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			base := filepath.Base(p)
+			if fi.IsDir() {
+				if p != root && strings.HasPrefix(base, ".") {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if strings.HasPrefix(base, ".") || binaryExt[strings.ToLower(filepath.Ext(p))] {
+				return nil
+			}
+			rel, err := filepath.Rel(root, p)
+			if err != nil {
+				return err
+			}
+			rel = filepath.ToSlash(rel)
+			data, err := os.ReadFile(p)
+			if err != nil {
+				return err
+			}
+			if entry == "" && (rel == "plan.mdx" || rel == "plan.md" || strings.HasSuffix(strings.ToLower(rel), ".mdx") || strings.HasSuffix(strings.ToLower(rel), ".md")) {
+				entry = rel
+			}
+			files = append(files, FilesPayloadFile{Title: rel, Content: string(data)})
+			return nil
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error reading %s: %v\n", root, err)
+			os.Exit(1)
+		}
+	} else {
+		data, err := os.ReadFile(root)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error reading %s: %v\n", root, err)
+			os.Exit(1)
+		}
+		entry = filepath.Base(root)
+		files = append(files, FilesPayloadFile{Title: entry, Content: string(data)})
+	}
+
+	if len(files) == 0 {
+		fmt.Fprintln(os.Stderr, "error: no usable plan files found")
+		os.Exit(1)
+	}
+	if entry == "" {
+		entry = files[0].Title
+	}
+
+	payload := PlanPayload{
+		Kind:        "visual-plan",
+		Title:       strings.TrimSuffix(filepath.Base(entry), filepath.Ext(entry)),
+		Entry:       entry,
+		Files:       files,
+		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	encryptAndPostMode(server, "/api/files", payload, passphrase, ttlFlag, noExpiry, "plan")
 }
 
 func runKeyGen(args []string) {
