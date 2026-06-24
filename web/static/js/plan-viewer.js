@@ -249,7 +249,9 @@
 
     var files = data.files || [];
     var entry = pickEntry(data);
-    var titleText = data.title || entry.title || "Visual plan";
+    var isVisualPlan = (data.kind || "") === "visual-plan" || (data.kind || "") === "visual-recap";
+    var docLabel = isVisualPlan ? "visual plan" : "documents";
+    var titleText = data.title || entry.title || (isVisualPlan ? "Visual plan" : "Documents");
 
     var viewer = document.createElement("div");
     viewer.className = "plan-viewer";
@@ -263,7 +265,7 @@
     headerLeft.style.gap = "0.75rem";
 
     var label = document.createElement("span");
-    label.textContent = "visual plan — " + titleText;
+    label.textContent = docLabel + " — " + titleText;
     headerLeft.appendChild(label);
 
     var meta = window.AgentGateExpiry ? window.AgentGateExpiry.getShareMeta() : null;
@@ -304,7 +306,7 @@
 
     if (files.length > 1) body.appendChild(createFileTree(files, entry.title, renderFile));
     body.appendChild(article);
-    body.appendChild(createFeedbackPanel(titleText));
+    if (isVisualPlan) body.appendChild(createFeedbackPanel(titleText));
     viewer.appendChild(body);
 
     app.innerHTML = "";

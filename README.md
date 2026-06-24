@@ -55,6 +55,9 @@ agentgate files src/foo.ts src/bar.ts
 # Share a runnable static webapp (a directory containing index.html)
 agentgate webapp ./dist
 
+# Share generic encrypted documents (no visual-plan-specific UI)
+agentgate docs ./docs/owner-mode-security-design.md
+
 # Share an encrypted visual plan (plan.mdx / plan.md or a folder)
 agentgate plan ./plans/my-plan
 
@@ -76,11 +79,18 @@ agentgate files --no-expiry src/foo.ts
 | `agentgate git-staged` | Encrypt & share staged changes |
 | `agentgate files <paths...>` | Encrypt & share file contents |
 | `agentgate webapp <dir>` | Encrypt & share a runnable static webapp |
+| `agentgate docs <file\|dir>` | Encrypt & share generic documents at `/d/{id}` |
 | `agentgate plan <file\|dir>` | Encrypt & share a visual plan bundle at `/plan/{id}` |
 
 All upload commands accept `-s, --server <url>`, `-p, --passphrase <key>`, `-t, --ttl <duration>`, and `--no-expiry` flags. TTL examples: `30m`, `24h`, `7d`.
 
 `--no-expiry` is mutually exclusive with `-t/--ttl`.
+
+## Sharing documents
+
+`agentgate docs <file|dir>` encrypts a Markdown/MDX file or folder and returns a **Docs URL** at `/d/{id}`. After the recipient enters the passphrase, the bundle is decrypted in the browser and rendered according to the files you uploaded. AgentGate does not add `canvas.mdx`, visual-plan labels, recap labels, or feedback UI in generic document mode.
+
+Use this mode for normal specs, reports, notes, and security design docs where the uploaded file structure should be preserved as-is.
 
 ## Sharing a visual plan
 

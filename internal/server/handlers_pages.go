@@ -120,6 +120,17 @@ func (s *Server) handleViewApp(w http.ResponseWriter, r *http.Request) {
 // storage and owner controls as /f/{id}; decryption and rendering happen in the
 // browser so the server never sees the plan text.
 func (s *Server) handleViewPlan(w http.ResponseWriter, r *http.Request) {
+	s.handleViewDocumentBundle(w, r)
+}
+
+// handleViewDocs renders a generic encrypted document bundle. It intentionally
+// uses the same renderer as visual plans but relies on the encrypted payload kind
+// to choose generic labels and to avoid plan-specific UI.
+func (s *Server) handleViewDocs(w http.ResponseWriter, r *http.Request) {
+	s.handleViewDocumentBundle(w, r)
+}
+
+func (s *Server) handleViewDocumentBundle(w http.ResponseWriter, r *http.Request) {
 	bundleID := chi.URLParam(r, "id")
 
 	bundle, err := db.GetFileBundle(s.db, bundleID)

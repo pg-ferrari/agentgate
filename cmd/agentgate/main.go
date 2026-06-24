@@ -74,6 +74,8 @@ func main() {
 		runWebapp(args)
 	case "plan":
 		runPlan(args)
+	case "docs":
+		runDocs(args)
 	case "key-gen":
 		runKeyGen(args)
 	case "key-get":
@@ -94,6 +96,7 @@ Commands:
   files       [-s server] [-p passphrase] [-t ttl|--no-expiry] <paths...>   Share files
   webapp      [-s server] [-p passphrase] [-t ttl|--no-expiry] <dir>         Share a runnable static webapp
   plan        [-s server] [-p passphrase] [-t ttl|--no-expiry] <file|dir>    Share an encrypted visual plan
+  docs        [-s server] [-p passphrase] [-t ttl|--no-expiry] <file|dir>    Share encrypted generic documents
   key-gen     [key]                                                         Generate or set a passphrase
   key-get                                                                   Print current passphrase
 
@@ -334,6 +337,10 @@ func printCreateResponse(body []byte, server string, displayMode string) {
 		label = "Plan URL"
 		previewURL = strings.Replace(previewURL, "/f/", "/plan/", 1)
 		manageURL = strings.Replace(manageURL, "/f/", "/plan/", 1)
+	case "docs":
+		label = "Docs URL"
+		previewURL = strings.Replace(previewURL, "/f/", "/d/", 1)
+		manageURL = strings.Replace(manageURL, "/f/", "/d/", 1)
 	}
 	fmt.Printf("%-12s %s\n", label+":", previewURL)
 	if manageURL != "" {
@@ -525,6 +532,14 @@ func runWebapp(args []string) {
 }
 
 func runPlan(args []string) {
+	runDocumentBundle(args, "visual-plan", "plan")
+}
+
+func runDocs(args []string) {
+	runDocumentBundle(args, "documents", "docs")
+}
+
+func runDocumentBundle(args []string, kind, displayMode string) {
 	serverFlag, passFlag, ttlFlag, noExpiry, paths := parseFlags(args)
 	server, err := resolveServer(serverFlag)
 	if err != nil {
@@ -538,7 +553,7 @@ func runPlan(args []string) {
 	}
 
 	if len(paths) != 1 {
-		fmt.Fprintln(os.Stderr, "error: plan takes exactly one file or directory")
+		fmt.Fprintf(os.Stderr, "error: %s takes exactly one file or directory\n", displayMode)
 		os.Exit(1)
 	}
 
@@ -607,13 +622,13 @@ func runPlan(args []string) {
 	}
 
 	payload := PlanPayload{
-		Kind:        "visual-plan",
+		Kind:        kind,
 		Title:       strings.TrimSuffix(filepath.Base(entry), filepath.Ext(entry)),
 		Entry:       entry,
 		Files:       files,
 		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
 	}
-	encryptAndPostMode(server, "/api/files", payload, passphrase, ttlFlag, noExpiry, "plan")
+	encryptAndPostMode(server, "/api/files", payload, passphrase, ttlFlag, noExpiry, displayMode)
 }
 
 func runKeyGen(args []string) {
