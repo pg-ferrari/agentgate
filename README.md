@@ -69,6 +69,82 @@ agentgate files -t 7d src/foo.ts
 agentgate files --no-expiry src/foo.ts
 ```
 
+## AI agent / skill setup
+
+AgentGate works well as a small tool that coding agents can call when they need to share encrypted diffs, files, docs, plans, or static prototypes. The agent only needs the CLI, a server URL, and a passphrase.
+
+### 1. Install the CLI where the agent runs
+
+```bash
+go install github.com/siygle/agentgate/cmd/agentgate@latest
+```
+
+Or place a prebuilt `agentgate` binary somewhere on the agent's `PATH`.
+
+### 2. Configure non-interactive environment variables
+
+Set these in the agent runtime, shell profile, `.envrc`, systemd unit, or secret manager:
+
+```bash
+export AGENTGATE_SERVER=https://your-domain.com
+export AGENTGATE_PASSPHRASE="use-a-long-random-shared-passphrase"
+```
+
+For a local one-time setup you can also run:
+
+```bash
+agentgate key-gen
+source ~/.zshrc   # or ~/.bashrc
+```
+
+For unattended agents, prefer setting `AGENTGATE_PASSPHRASE` explicitly through your normal secrets mechanism instead of relying on an interactive shell profile.
+
+### 3. Add an agent skill/instruction
+
+Example `SKILL.md` for agents that support filesystem-based skills:
+
+```markdown
+---
+name: agentgate-share
+description: Share encrypted code diffs, files, docs, plans, or static webapps with AgentGate. Use when the user asks for a secure preview/share link.
+---
+
+# AgentGate sharing
+
+Use `agentgate` to create encrypted AgentGate links.
+
+Before sharing:
+1. Confirm `agentgate` is installed: `agentgate key-get`.
+2. Confirm `AGENTGATE_SERVER` and `AGENTGATE_PASSPHRASE` are available.
+3. Never print or commit the passphrase.
+4. Keep the Manage URL private unless the user explicitly needs ownership controls.
+
+Commands:
+- `agentgate git-staged` — share staged changes.
+- `agentgate git-latest` — share the latest commit diff.
+- `agentgate files <paths...>` — share selected files.
+- `agentgate docs <file|dir>` — share rendered Markdown/MDX documents.
+- `agentgate plan <file|dir>` — share a visual plan bundle.
+- `agentgate webapp <dir>` — share a runnable static prototype with `index.html`.
+
+TTL:
+- Default server TTL is 7 days.
+- Use `-t 24h`, `-t 7d`, or `--no-expiry` when the user requests a different lifetime.
+
+After upload, return the public Preview/Docs/Plan/App URL to the user. Do not expose the passphrase in chat; share it out-of-band if needed.
+```
+
+For pi, one possible location is `~/.pi/agent/skills/agentgate-share/SKILL.md`. Other agents can use the same text as a tool instruction or custom skill.
+
+### 4. Optional: point agents at the LLM reference
+
+A running AgentGate server exposes:
+
+- `/llms.txt` — short integration index
+- `/llms-full.txt` — complete CLI/API/encryption reference for agents
+
+Add `https://your-domain.com/llms-full.txt` to your agent's project docs or retrieval sources when it supports URL-based documentation.
+
 ## CLI commands
 
 | Command | Description |

@@ -19,15 +19,15 @@ func (s *Server) handleLLMsFullTxt(w http.ResponseWriter, r *http.Request) {
 
 const llmsTxtTemplate = `# AgentGate
 
-> Self-hosted encrypted diff & file sharing. AES-256-GCM end-to-end encryption, single binary, SQLite storage, 24-hour auto-expiry.
+> Self-hosted encrypted diff & file sharing. AES-256-GCM end-to-end encryption, single binary, SQLite storage, 7-day default auto-expiry.
 
 AgentGate encrypts code diffs and files client-side before uploading. The server never sees plaintext. Recipients need the passphrase to decrypt.
 
 ## Docs
 
 - [Full LLM reference](%s/llms-full.txt): Complete API, CLI, encryption, and payload format details for building integrations
-- [Source code](https://github.com/siygle/diff4): GitHub repository with README, issues, and releases
-- [CLI releases](https://github.com/siygle/diff4/releases): Prebuilt binaries for all platforms
+- [Source code](https://github.com/siygle/agentgate): GitHub repository with README, issues, and releases
+- [CLI releases](https://github.com/siygle/agentgate/releases): Prebuilt binaries for all platforms
 
 ## API
 
@@ -41,7 +41,7 @@ AgentGate encrypts code diffs and files client-side before uploading. The server
 
 const llmsFullTxtTemplate = `# AgentGate
 
-> Self-hosted encrypted diff & file sharing. AES-256-GCM end-to-end encryption, single binary, SQLite storage, 24-hour auto-expiry.
+> Self-hosted encrypted diff & file sharing. AES-256-GCM end-to-end encryption, single binary, SQLite storage, 7-day default auto-expiry.
 
 AgentGate encrypts code diffs and files client-side before uploading. The server never sees plaintext. Recipients need the passphrase to decrypt.
 
@@ -53,7 +53,7 @@ Install with Go:
 
     go install github.com/siygle/agentgate/cmd/agentgate@latest
 
-Or download a prebuilt binary from [GitHub Releases](https://github.com/siygle/diff4/releases).
+Or download a prebuilt binary from [GitHub Releases](https://github.com/siygle/agentgate/releases).
 
 ## CLI Setup
 
@@ -68,10 +68,13 @@ Set the server URL (required) and generate an encryption passphrase:
 - ` + "`agentgate git-latest`" + `: Share the latest commit diff
 - ` + "`agentgate git-staged`" + `: Share staged changes
 - ` + "`agentgate files <paths...>`" + `: Share one or more files
+- ` + "`agentgate docs <file|dir>`" + `: Share rendered Markdown/MDX documents
+- ` + "`agentgate plan <file|dir>`" + `: Share a visual plan bundle
+- ` + "`agentgate webapp <dir>`" + `: Share a runnable static webapp containing index.html
 - ` + "`agentgate key-gen [key]`" + `: Generate or set encryption passphrase
 - ` + "`agentgate key-get`" + `: Print current passphrase
 
-All upload commands accept ` + "`-s <server>`" + ` and ` + "`-p <passphrase>`" + ` flags to override environment variables.
+All upload commands accept ` + "`-s <server>`" + `, ` + "`-p <passphrase>`" + `, ` + "`-t <duration>`" + `, and ` + "`--no-expiry`" + ` flags to override environment variables and retention.
 
 ## Environment Variables
 
@@ -152,8 +155,8 @@ These are the JSON structures that get encrypted before being sent to the API.
 
 ## Source Code
 
-- [GitHub repository](https://github.com/siygle/diff4)
-- [CLI releases](https://github.com/siygle/diff4/releases)
+- [GitHub repository](https://github.com/siygle/agentgate)
+- [CLI releases](https://github.com/siygle/agentgate/releases)
 - [Go module](https://pkg.go.dev/github.com/siygle/agentgate)
 
 ## Creating a Skill
@@ -163,12 +166,13 @@ To create a skill or integration for AgentGate CLI, an agent needs to:
 1. Check that ` + "`agentgate`" + ` is installed (run ` + "`agentgate key-get`" + ` to verify)
 2. If not installed, run ` + "`go install github.com/siygle/agentgate/cmd/agentgate@latest`" + `
 3. Ensure ` + "`AGENTGATE_SERVER`" + ` and ` + "`AGENTGATE_PASSPHRASE`" + ` are set
-4. Use the CLI commands to share diffs or files — output is JSON with a ` + "`preview_url`" + `
-5. Present the preview URL to the user
+4. Use the CLI commands to share diffs, files, docs, plans, or webapps
+5. Present the public Preview/Docs/Plan/App URL to the user
+6. Keep the passphrase and Manage URL private unless the user explicitly asks for ownership controls
 
 Example workflow for sharing the latest commit:
 
     agentgate git-latest -s %s
 
-The command prints JSON to stdout containing ` + "`preview_url`" + ` which can be shared directly.
+The command prints a human-readable URL line, such as ` + "`Preview URL: https://...`" + `. Extract that URL and share it with the user. Do not reveal ` + "`AGENTGATE_PASSPHRASE`" + ` in chat.
 `
