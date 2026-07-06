@@ -23,7 +23,7 @@
     {
       "binding": "DB",
       "database_name": "agentgate",
-      "database_id": "REPLACE_WITH_YOUR_D1_DATABASE_ID",
+      "database_id": "f50ed3f8-b4cd-4657-9251-e80e2b78660d",
       "migrations_dir": "migrations"
     }
   ],
