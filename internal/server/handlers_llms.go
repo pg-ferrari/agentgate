@@ -113,6 +113,18 @@ Response (201 Created):
 
 Create an encrypted file bundle. Same request/response format as POST /api/diff. The preview URL uses ` + "`/f/<id>`" + ` instead of ` + "`/p/<id>`" + `.
 
+## Built-in webapp assets
+
+AgentGate webapps run in an offline sandbox. For financial charts, include the built-in TradingView Lightweight Charts script instead of bundling it in every upload:
+
+` + "```" + `html
+<script src="agentgate:lightweight-charts"></script>
+<!-- or -->
+<script src="agentgate://vendor/lightweight-charts.js"></script>
+` + "```" + `
+
+The app viewer inlines the vendored script into the sandboxed iframe before rendering, exposing the normal ` + "`LightweightCharts`" + ` global.
+
 ## Encryption Details
 
 - Algorithm: AES-256-GCM

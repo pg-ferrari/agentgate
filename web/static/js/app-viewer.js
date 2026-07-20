@@ -100,11 +100,40 @@
     });
   }
 
+  var BUILTIN_ASSETS = {
+    "agentgate:lightweight-charts": "/static/vendor/lightweight-charts.standalone.production.js",
+    "agentgate://vendor/lightweight-charts.js": "/static/vendor/lightweight-charts.standalone.production.js",
+    "agentgate://vendor/lightweight-charts.standalone.production.js":
+      "/static/vendor/lightweight-charts.standalone.production.js",
+    "/static/vendor/lightweight-charts.standalone.production.js":
+      "/static/vendor/lightweight-charts.standalone.production.js",
+  };
+  var builtinCache = {};
+
+  function builtinAssetURL(ref) {
+    if (!ref) return null;
+    return BUILTIN_ASSETS[ref.replace(/[?#].*$/, "")] || null;
+  }
+
+  function fetchBuiltinText(url) {
+    if (!builtinCache[url]) {
+      builtinCache[url] = fetch(url, { credentials: "same-origin" }).then(function (res) {
+        if (!res.ok) throw new Error("Failed to load built-in asset " + url + ": " + res.status);
+        return res.text();
+      });
+    }
+    return builtinCache[url];
+  }
+
+  function escapeScriptText(text) {
+    return String(text || "").replace(/<\/script/gi, "<\\/script");
+  }
+
   function assemble(files) {
     var map = buildFileMap(files);
     var entry = findEntry(map, files);
     if (entry == null) {
-      return { error: "No index.html (or any .html file) found in this bundle." };
+      return Promise.resolve({ error: "No index.html (or any .html file) found in this bundle." });
     }
 
     var doc = new DOMParser().parseFromString(entry, "text/html");
@@ -144,41 +173,61 @@
       style.textContent = inlineCSSUrls(style.textContent || "", map);
     });
 
+    var builtinPromises = [];
     var scripts = doc.querySelectorAll("script[src]");
     Array.prototype.forEach.call(scripts, function (script) {
-      var js = lookup(map, script.getAttribute("src"));
-      if (js == null) return;
-      var inline = doc.createElement("script");
-      var type = script.getAttribute("type");
-      if (type) inline.setAttribute("type", type);
-      inline.textContent = js.content;
-      script.parentNode.replaceChild(inline, script);
+      var src = script.getAttribute("src");
+      var js = lookup(map, src);
+      if (js != null) {
+        var inline = doc.createElement("script");
+        var type = script.getAttribute("type");
+        if (type) inline.setAttribute("type", type);
+        inline.textContent = js.content;
+        script.parentNode.replaceChild(inline, script);
+        return;
+      }
+
+      var builtinURL = builtinAssetURL(src);
+      if (!builtinURL) return;
+      builtinPromises.push(
+        fetchBuiltinText(builtinURL).then(function (content) {
+          if (!script.parentNode) return;
+          var inlineBuiltin = doc.createElement("script");
+          var type = script.getAttribute("type");
+          if (type) inlineBuiltin.setAttribute("type", type);
+          inlineBuiltin.setAttribute("data-agentgate-builtin", src);
+          inlineBuiltin.textContent = escapeScriptText(content);
+          script.parentNode.replaceChild(inlineBuiltin, script);
+        })
+      );
     });
 
-    var mediaSel = "img[src], source[src], audio[src], video[src], image[href]";
-    var media = doc.querySelectorAll(mediaSel);
-    Array.prototype.forEach.call(media, function (el) {
-      var attr = el.hasAttribute("src") ? "src" : "href";
-      var found = lookup(map, el.getAttribute(attr));
-      if (found == null) return;
-      el.setAttribute(attr, toDataURI(found, el.getAttribute(attr)));
+    return Promise.all(builtinPromises).then(function () {
+      var mediaSel = "img[src], source[src], audio[src], video[src], image[href]";
+      var media = doc.querySelectorAll(mediaSel);
+      Array.prototype.forEach.call(media, function (el) {
+        var attr = el.hasAttribute("src") ? "src" : "href";
+        var found = lookup(map, el.getAttribute(attr));
+        if (found == null) return;
+        el.setAttribute(attr, toDataURI(found, el.getAttribute(attr)));
+      });
+
+      // Inject a tiny height reporter so the (sandboxed, opaque-origin) app can
+      // tell the parent its full content height on request via postMessage. This
+      // keeps the security sandbox intact — no allow-same-origin needed — and lets
+      // PDF export expand the iframe to full height so printing paginates instead
+      // of clipping to one page. It only responds to an explicit request message.
+      var reporter = doc.createElement("script");
+      reporter.textContent =
+        "(function(){function h(){var d=document,e=d.documentElement,b=d.body;" +
+        "return Math.max(e?e.scrollHeight:0,e?e.offsetHeight:0,b?b.scrollHeight:0,b?b.offsetHeight:0);}" +
+        "window.addEventListener('message',function(ev){if(ev&&ev.data&&ev.data.__agentgate_request_height){" +
+        "try{parent.postMessage({__agentgate_app_height:h()},'*');}catch(e){}}});})();";
+      (doc.body || doc.documentElement).appendChild(reporter);
+
+      var html = "<!DOCTYPE html>\n" + doc.documentElement.outerHTML;
+      return { html: html };
     });
-
-    // Inject a tiny height reporter so the (sandboxed, opaque-origin) app can
-    // tell the parent its full content height on request via postMessage. This
-    // keeps the security sandbox intact — no allow-same-origin needed — and lets
-    // PDF export expand the iframe to full height so printing paginates instead
-    // of clipping to one page. It only responds to an explicit request message.
-    var reporter = doc.createElement("script");
-    reporter.textContent =
-      "(function(){function h(){var d=document,e=d.documentElement,b=d.body;" +
-      "return Math.max(e?e.scrollHeight:0,e?e.offsetHeight:0,b?b.scrollHeight:0,b?b.offsetHeight:0);}" +
-      "window.addEventListener('message',function(ev){if(ev&&ev.data&&ev.data.__agentgate_request_height){" +
-      "try{parent.postMessage({__agentgate_app_height:h()},'*');}catch(e){}}});})();";
-    (doc.body || doc.documentElement).appendChild(reporter);
-
-    var html = "<!DOCTYPE html>\n" + doc.documentElement.outerHTML;
-    return { html: html };
   }
 
   // exportAppPdf expands the sandboxed iframe to its full reported height, prints
@@ -242,7 +291,6 @@
     if (!app) return;
 
     var files = data.files || [];
-    var result = assemble(files);
 
     var viewer = document.createElement("div");
     viewer.className = "app-viewer";
@@ -283,45 +331,60 @@
     headerEl.appendChild(headerRight);
     viewer.appendChild(headerEl);
 
-    if (result.error) {
-      var err = document.createElement("div");
-      err.className = "app-error";
-      err.textContent = result.error;
-      viewer.appendChild(err);
-    } else {
-      var frame = document.createElement("iframe");
-      frame.className = "app-frame";
-      // No allow-same-origin: the app runs in an opaque origin so it cannot
-      // reach this decryption page or other shares. localStorage/cookies are
-      // therefore unavailable to the framed app by design.
-      frame.setAttribute("sandbox", "allow-scripts allow-forms allow-modals allow-popups");
-      frame.setAttribute("srcdoc", result.html);
-      viewer.appendChild(frame);
-    }
-
-    if (window.AgentGateExport) {
-      var exportCtx = {
-        kind: "app",
-        title: data.title || "webapp",
-        multi: false,
-        sources: files.map(function (f) {
-          return { name: f.title, content: f.content, encoding: f.encoding };
-        }),
-      };
-      if (result.error) {
-        // Nothing rendered to expand; fall back to a plain print.
-        exportCtx.pdfLive = true;
-      } else {
-        // Expand the sandboxed iframe to full height, then print (paginates).
-        exportCtx.pdfCustom = function () {
-          exportAppPdf(frame);
-        };
-      }
-      window.AgentGateExport.renderExportControl(headerRight, exportCtx);
-    }
+    var loading = document.createElement("div");
+    loading.className = "app-error";
+    loading.textContent = "Preparing webapp...";
+    viewer.appendChild(loading);
 
     app.innerHTML = "";
     app.appendChild(viewer);
+
+    assemble(files)
+      .then(function (result) {
+        if (loading.parentNode) loading.parentNode.removeChild(loading);
+        var frame = null;
+
+        if (result.error) {
+          var err = document.createElement("div");
+          err.className = "app-error";
+          err.textContent = result.error;
+          viewer.appendChild(err);
+        } else {
+          frame = document.createElement("iframe");
+          frame.className = "app-frame";
+          // No allow-same-origin: the app runs in an opaque origin so it cannot
+          // reach this decryption page or other shares. localStorage/cookies are
+          // therefore unavailable to the framed app by design.
+          frame.setAttribute("sandbox", "allow-scripts allow-forms allow-modals allow-popups");
+          frame.setAttribute("srcdoc", result.html);
+          viewer.appendChild(frame);
+        }
+
+        if (window.AgentGateExport) {
+          var exportCtx = {
+            kind: "app",
+            title: data.title || "webapp",
+            multi: false,
+            sources: files.map(function (f) {
+              return { name: f.title, content: f.content, encoding: f.encoding };
+            }),
+          };
+          if (result.error || !frame) {
+            // Nothing rendered to expand; fall back to a plain print.
+            exportCtx.pdfLive = true;
+          } else {
+            // Expand the sandboxed iframe to full height, then print (paginates).
+            exportCtx.pdfCustom = function () {
+              exportAppPdf(frame);
+            };
+          }
+          window.AgentGateExport.renderExportControl(headerRight, exportCtx);
+        }
+      })
+      .catch(function (err) {
+        console.error("Failed to prepare webapp:", err);
+        loading.textContent = "Failed to prepare webapp: " + (err && err.message ? err.message : err);
+      });
   }
 
   function attemptDecrypt(passphrase, remember) {

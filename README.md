@@ -134,6 +134,37 @@ TTL:
 After upload, return the public Preview/Docs/Plan/App URL to the user. Do not expose the passphrase in chat; share it out-of-band if needed.
 ```
 
+### Built-in TradingView Lightweight Charts for webapps
+
+AgentGate webapps run in an offline sandbox. To avoid bundling a large charting
+library into every encrypted upload, the app viewer provides a built-in vendored
+copy of TradingView Lightweight Charts. Reference it from your uploaded
+`index.html` with either alias below; AgentGate will inline it into the sandboxed
+iframe before rendering:
+
+```html
+<script src="agentgate:lightweight-charts"></script>
+<!-- or -->
+<script src="agentgate://vendor/lightweight-charts.js"></script>
+```
+
+Then use the normal global API inside the webapp:
+
+```html
+<div id="chart" style="height: 420px"></div>
+<script>
+  const chart = LightweightCharts.createChart(document.getElementById("chart"));
+  const candles = chart.addSeries(LightweightCharts.CandlestickSeries, {});
+  candles.setData([
+    { time: "2026-07-20", open: 53.6, high: 57.3, low: 51.7, close: 53.2 },
+  ]);
+  chart.timeScale().fitContent();
+</script>
+```
+
+This keeps financial-chart reports smaller and avoids the layout issues caused by
+hand-drawn SVG charts on mobile.
+
 For pi, one possible location is `~/.pi/agent/skills/agentgate-share/SKILL.md`. Other agents can use the same text as a tool instruction or custom skill.
 
 ### 4. Optional: point agents at the LLM reference
