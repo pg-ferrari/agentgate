@@ -348,8 +348,22 @@
       ]);
     }
 
+    function promoteMermaidCodeBlocks(node) {
+      if (!node) return;
+      var blocks = node.querySelectorAll("pre > code.language-mermaid, pre > code.lang-mermaid");
+      for (var i = 0; i < blocks.length; i++) {
+        var code = blocks[i];
+        var pre = code.parentElement;
+        var div = document.createElement("div");
+        div.className = "mermaid";
+        div.textContent = code.textContent || "";
+        if (pre) pre.replaceWith(div);
+      }
+    }
+
     function finishRenderedContent(node) {
       resolveAssets(node, assetMap);
+      promoteMermaidCodeBlocks(node);
       attachCodeHighlight(node);
       renderWireframes(node);
       return renderMermaid(node); // may return a promise (async diagrams)
