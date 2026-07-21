@@ -9,17 +9,23 @@
     fontFamily: "system",
   };
 
-  var FONT_SIZES = {
+  var CODE_FONT_SIZES = {
     small: "0.75rem",
     medium: "0.8125rem",
     large: "0.9375rem",
   };
 
+  var CONTENT_FONT_SIZES = {
+    small: "0.875rem",
+    medium: "0.9375rem",
+    large: "1.0625rem",
+  };
+
   var FONT_FAMILIES = {
     system: "",
-    "JetBrains Mono": "'JetBrains Mono', monospace",
-    "Fira Code": "'Fira Code', monospace",
-    "Source Code Pro": "'Source Code Pro', monospace",
+    "JetBrains Mono": "'JetBrains Mono', ui-monospace, SFMono-Regular, monospace",
+    "Fira Code": "'Fira Code', ui-monospace, SFMono-Regular, monospace",
+    "Source Code Pro": "'Source Code Pro', ui-monospace, SFMono-Regular, monospace",
   };
 
   var GOOGLE_FONT_URLS = {
@@ -82,8 +88,10 @@
   }
 
   function applyFontSize(size) {
-    var value = FONT_SIZES[size] || FONT_SIZES.medium;
-    document.documentElement.style.setProperty("--code-font-size", value);
+    var codeValue = CODE_FONT_SIZES[size] || CODE_FONT_SIZES.medium;
+    var contentValue = CONTENT_FONT_SIZES[size] || CONTENT_FONT_SIZES.medium;
+    document.documentElement.style.setProperty("--code-font-size", codeValue);
+    document.documentElement.style.setProperty("--content-font-size", contentValue);
   }
 
   function loadGoogleFont(name) {
@@ -101,8 +109,10 @@
     if (value) {
       loadGoogleFont(family);
       document.documentElement.style.setProperty("--code-font-family", value);
+      document.documentElement.style.setProperty("--content-font-family", value);
     } else {
       document.documentElement.style.removeProperty("--code-font-family");
+      document.documentElement.style.removeProperty("--content-font-family");
     }
   }
 
