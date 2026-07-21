@@ -1339,6 +1339,74 @@ a:hover {
   border: 1px solid var(--border-light);
 }
 
+.mdx-card {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-secondary);
+  padding: 1rem;
+  margin: 1rem 0;
+  overflow: auto;
+}
+
+.mdx-card > :first-child { margin-top: 0; }
+.mdx-card > :last-child { margin-bottom: 0; }
+
+.mdx-endpoint h3 code:first-child {
+  display: inline-block;
+  min-width: 4.5rem;
+  text-align: center;
+  color: #fff;
+  background: var(--accent);
+  border-radius: 999px;
+  padding: 0.18rem 0.55rem;
+}
+
+.mdx-caption {
+  color: var(--fg-muted);
+  font-size: 0.875rem;
+  font-weight: 600;
+  margin-bottom: 0.75rem;
+}
+
+.diagram-panel {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1rem;
+}
+
+.diagram-col {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.diagram-pill,
+.diagram-node,
+.diagram-box {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  padding: 0.7rem 0.85rem;
+  text-align: center;
+}
+
+.diagram-pill {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+  font-weight: 700;
+  border-radius: 999px;
+}
+
+.diagram-node {
+  border-style: dashed;
+}
+
+.diagram-muted {
+  color: var(--fg-muted);
+  font-size: 0.85em;
+}
+
 @media (min-width: 900px) {
   .plan-layout {
     grid-template-columns: 260px minmax(0, 1fr);
