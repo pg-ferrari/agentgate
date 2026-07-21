@@ -336,17 +336,46 @@
 
     // Shared render pipeline — used for the live view, and reused verbatim for
     // PDF export so the printed output matches the screen exactly.
-    function renderContentInto(node, content) {
-      node.innerHTML = renderMarkdown(content || "");
+    function isMdxFile(file) {
+      return /\.mdx$/i.test((file && file.title) || "");
+    }
+
+    function mdxRuntimeWithTimeout() {
+      if (!window.AgentGateMDXRuntimeReady) return Promise.resolve(null);
+      return Promise.race([
+        window.AgentGateMDXRuntimeReady,
+        new Promise(function (resolve) { setTimeout(function () { resolve(null); }, 7000); })
+      ]);
+    }
+
+    function finishRenderedContent(node) {
       resolveAssets(node, assetMap);
       attachCodeHighlight(node);
       renderWireframes(node);
       return renderMermaid(node); // may return a promise (async diagrams)
     }
 
+    function renderContentInto(node, content, file) {
+      if (isMdxFile(file)) {
+        node.innerHTML = '<div class="mdx-loading">Rendering MDX…</div>';
+        return mdxRuntimeWithTimeout().then(function (runtime) {
+          if (!runtime || !runtime.renderMdxInto) throw new Error("MDX runtime unavailable");
+          return runtime.renderMdxInto(node, content || "");
+        }).then(function () {
+          return finishRenderedContent(node);
+        }).catch(function (err) {
+          console.warn("MDX runtime render failed; falling back to markdown", err);
+          node.innerHTML = renderMarkdown(content || "");
+          return finishRenderedContent(node);
+        });
+      }
+      node.innerHTML = renderMarkdown(content || "");
+      return finishRenderedContent(node);
+    }
+
     function renderFile(file) {
       entry = file;
-      renderContentInto(article, file.content || "");
+      renderContentInto(article, file.content || "", file);
       var buttons = body.querySelectorAll(".plan-file-tree button");
       for (var i = 0; i < buttons.length; i++) buttons[i].classList.toggle("active", buttons[i].textContent === file.title);
     }
@@ -367,7 +396,7 @@
         var sec = document.createElement("article");
         sec.className = "markdown-body plan-document";
         root.appendChild(sec);
-        var p = renderContentInto(sec, f.content || "");
+        var p = renderContentInto(sec, f.content || "", f);
         if (p) promises.push(p);
       });
       return Promise.all(promises);

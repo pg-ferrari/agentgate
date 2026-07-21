@@ -1339,7 +1339,9 @@ a:hover {
   border: 1px solid var(--border-light);
 }
 
-.mdx-card {
+.mdx-loading,
+.mdx-card,
+.mdx-callout {
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--bg-secondary);
@@ -1348,10 +1350,44 @@ a:hover {
   overflow: auto;
 }
 
-.mdx-card > :first-child { margin-top: 0; }
-.mdx-card > :last-child { margin-bottom: 0; }
+.mdx-card > :first-child,
+.mdx-callout > :first-child { margin-top: 0; }
+.mdx-card > :last-child,
+.mdx-callout > :last-child { margin-bottom: 0; }
 
-.mdx-endpoint h3 code:first-child {
+.mdx-callout {
+  border-left-width: 5px;
+}
+
+.mdx-callout-decision { border-left-color: #2563eb; }
+.mdx-callout-info { border-left-color: #0ea5e9; }
+.mdx-callout-warn { border-left-color: #f59e0b; }
+.mdx-callout-danger { border-left-color: #ef4444; }
+
+.mdx-callout-label,
+.mdx-change {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 0.12rem 0.5rem;
+  background: var(--bg-tertiary);
+  color: var(--fg-muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.mdx-callout-body { margin-top: 0.5rem; }
+
+.mdx-endpoint-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.mdx-method {
   display: inline-block;
   min-width: 4.5rem;
   text-align: center;
@@ -1359,13 +1395,60 @@ a:hover {
   background: var(--accent);
   border-radius: 999px;
   padding: 0.18rem 0.55rem;
+  font-weight: 700;
+}
+
+.mdx-method-post { background: #16a34a; }
+.mdx-method-put,
+.mdx-method-patch { background: #d97706; }
+.mdx-method-delete { background: #dc2626; }
+
+.mdx-path {
+  font-size: 0.95rem;
+}
+
+.mdx-caption,
+.mdx-summary,
+.mdx-auth,
+.mdx-note {
+  color: var(--fg-muted);
+  font-size: 0.875rem;
 }
 
 .mdx-caption {
-  color: var(--fg-muted);
-  font-size: 0.875rem;
   font-weight: 600;
   margin-bottom: 0.75rem;
+}
+
+.mdx-table-wrap {
+  overflow-x: auto;
+  margin-bottom: 1rem;
+}
+
+.mdx-table-wrap table {
+  margin-bottom: 0;
+}
+
+.mdx-file-tree ul,
+.mdx-checklist ul,
+.mdx-annotations {
+  padding-left: 1.2rem;
+}
+
+.mdx-checklist input,
+.mdx-option input {
+  margin-right: 0.4rem;
+}
+
+.mdx-option {
+  display: block;
+  margin: 0.35rem 0;
+}
+
+.mdx-diff-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1rem;
 }
 
 .diagram-panel {
