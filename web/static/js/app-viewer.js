@@ -10,6 +10,25 @@
     html: "text/html",
     txt: "text/plain",
     xml: "application/xml",
+    // Binary asset types (carried as base64 in the bundle).
+    png: "image/png",
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    gif: "image/gif",
+    webp: "image/webp",
+    ico: "image/x-icon",
+    bmp: "image/bmp",
+    woff: "font/woff",
+    woff2: "font/woff2",
+    ttf: "font/ttf",
+    otf: "font/otf",
+    eot: "application/vnd.ms-fontobject",
+    mp3: "audio/mpeg",
+    wav: "audio/wav",
+    mp4: "video/mp4",
+    webm: "video/webm",
+    wasm: "application/wasm",
+    pdf: "application/pdf",
   };
 
   function normalizeKey(path) {
@@ -21,15 +40,18 @@
 
   // buildFileMap indexes files by both their full relative path and basename so
   // references like "css/app.css", "./css/app.css" and "app.css" all resolve.
+  // Each value is an entry { content, encoding }; encoding is "base64" for binary
+  // assets and "" (falsy) for UTF-8 text — a missing encoding means text, which
+  // keeps bundles produced before base64 support rendering unchanged.
   function buildFileMap(files) {
     var map = {};
     files.forEach(function (f) {
       var name = f.title || "";
-      var content = f.content || "";
-      map[normalizeKey(name)] = content;
+      var entry = { content: f.content || "", encoding: f.encoding || "" };
+      map[normalizeKey(name)] = entry;
       var base = name.split("/").pop();
       if (base && !(normalizeKey(base) in map)) {
-        map[normalizeKey(base)] = content;
+        map[normalizeKey(base)] = entry;
       }
     });
     return map;
@@ -50,16 +72,22 @@
   }
 
   function findEntry(map, files) {
-    if ("index.html" in map) return map["index.html"];
+    if ("index.html" in map) return map["index.html"].content;
     for (var i = 0; i < files.length; i++) {
       if (ext(files[i].title) === "html") return files[i].content || "";
     }
     return null;
   }
 
-  function toDataURI(content, name) {
-    var mime = MIME[ext(name)] || "text/plain";
-    return "data:" + mime + ";charset=utf-8," + encodeURIComponent(content);
+  // toDataURI turns a bundle entry into a data: URI. Base64 entries (binary
+  // assets) are emitted verbatim as base64; text entries are percent-encoded.
+  function toDataURI(entry, name) {
+    var isBase64 = entry && entry.encoding === "base64";
+    var mime = MIME[ext(name)] || (isBase64 ? "application/octet-stream" : "text/plain");
+    if (isBase64) {
+      return "data:" + mime + ";base64," + entry.content;
+    }
+    return "data:" + mime + ";charset=utf-8," + encodeURIComponent(entry.content);
   }
 
   // inlineCSSUrls rewrites url(...) references inside a stylesheet to data URIs
@@ -72,21 +100,71 @@
     });
   }
 
+  var BUILTIN_ASSETS = {
+    "agentgate:lightweight-charts": "/static/vendor/lightweight-charts.standalone.production.js",
+    "agentgate://vendor/lightweight-charts.js": "/static/vendor/lightweight-charts.standalone.production.js",
+    "agentgate://vendor/lightweight-charts.standalone.production.js":
+      "/static/vendor/lightweight-charts.standalone.production.js",
+    "/static/vendor/lightweight-charts.standalone.production.js":
+      "/static/vendor/lightweight-charts.standalone.production.js",
+  };
+  var builtinCache = {};
+
+  function builtinAssetURL(ref) {
+    if (!ref) return null;
+    return BUILTIN_ASSETS[ref.replace(/[?#].*$/, "")] || null;
+  }
+
+  function fetchBuiltinText(url) {
+    if (!builtinCache[url]) {
+      builtinCache[url] = fetch(url, { credentials: "same-origin" }).then(function (res) {
+        if (!res.ok) throw new Error("Failed to load built-in asset " + url + ": " + res.status);
+        return res.text();
+      });
+    }
+    return builtinCache[url];
+  }
+
+  function escapeScriptText(text) {
+    return String(text || "").replace(/<\/script/gi, "<\\/script");
+  }
+
   function assemble(files) {
     var map = buildFileMap(files);
     var entry = findEntry(map, files);
     if (entry == null) {
-      return { error: "No index.html (or any .html file) found in this bundle." };
+      return Promise.resolve({ error: "No index.html (or any .html file) found in this bundle." });
     }
 
     var doc = new DOMParser().parseFromString(entry, "text/html");
+
+    // Lock the framed app to an offline, self-contained execution model. Because
+    // every asset is inlined to a data: URI (see below), the app needs no network
+    // at all. connect-src 'none' blocks fetch/XHR/WebSocket/sendBeacon, and
+    // restricting img/font/media/style/script to inline+data: closes the remaining
+    // exfiltration vectors (e.g. new Image().src = '//evil/?' + secret). This runs
+    // on top of the opaque-origin iframe sandbox for defense in depth.
+    var csp = doc.createElement("meta");
+    csp.setAttribute("http-equiv", "Content-Security-Policy");
+    csp.setAttribute(
+      "content",
+      "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; " +
+        "img-src data: blob:; font-src data:; media-src data: blob:; " +
+        "connect-src 'none'; form-action 'none'; base-uri 'none'"
+    );
+    var head = doc.head || doc.getElementsByTagName("head")[0];
+    if (head) {
+      head.insertBefore(csp, head.firstChild);
+    } else {
+      doc.documentElement.insertBefore(csp, doc.documentElement.firstChild);
+    }
 
     var links = doc.querySelectorAll('link[rel~="stylesheet"][href]');
     Array.prototype.forEach.call(links, function (link) {
       var css = lookup(map, link.getAttribute("href"));
       if (css == null) return;
       var style = doc.createElement("style");
-      style.textContent = inlineCSSUrls(css, map);
+      style.textContent = inlineCSSUrls(css.content, map);
       link.parentNode.replaceChild(style, link);
     });
 
@@ -95,41 +173,61 @@
       style.textContent = inlineCSSUrls(style.textContent || "", map);
     });
 
+    var builtinPromises = [];
     var scripts = doc.querySelectorAll("script[src]");
     Array.prototype.forEach.call(scripts, function (script) {
-      var js = lookup(map, script.getAttribute("src"));
-      if (js == null) return;
-      var inline = doc.createElement("script");
-      var type = script.getAttribute("type");
-      if (type) inline.setAttribute("type", type);
-      inline.textContent = js;
-      script.parentNode.replaceChild(inline, script);
+      var src = script.getAttribute("src");
+      var js = lookup(map, src);
+      if (js != null) {
+        var inline = doc.createElement("script");
+        var type = script.getAttribute("type");
+        if (type) inline.setAttribute("type", type);
+        inline.textContent = js.content;
+        script.parentNode.replaceChild(inline, script);
+        return;
+      }
+
+      var builtinURL = builtinAssetURL(src);
+      if (!builtinURL) return;
+      builtinPromises.push(
+        fetchBuiltinText(builtinURL).then(function (content) {
+          if (!script.parentNode) return;
+          var inlineBuiltin = doc.createElement("script");
+          var type = script.getAttribute("type");
+          if (type) inlineBuiltin.setAttribute("type", type);
+          inlineBuiltin.setAttribute("data-agentgate-builtin", src);
+          inlineBuiltin.textContent = escapeScriptText(content);
+          script.parentNode.replaceChild(inlineBuiltin, script);
+        })
+      );
     });
 
-    var mediaSel = "img[src], source[src], audio[src], video[src], image[href]";
-    var media = doc.querySelectorAll(mediaSel);
-    Array.prototype.forEach.call(media, function (el) {
-      var attr = el.hasAttribute("src") ? "src" : "href";
-      var found = lookup(map, el.getAttribute(attr));
-      if (found == null) return;
-      el.setAttribute(attr, toDataURI(found, el.getAttribute(attr)));
+    return Promise.all(builtinPromises).then(function () {
+      var mediaSel = "img[src], source[src], audio[src], video[src], image[href]";
+      var media = doc.querySelectorAll(mediaSel);
+      Array.prototype.forEach.call(media, function (el) {
+        var attr = el.hasAttribute("src") ? "src" : "href";
+        var found = lookup(map, el.getAttribute(attr));
+        if (found == null) return;
+        el.setAttribute(attr, toDataURI(found, el.getAttribute(attr)));
+      });
+
+      // Inject a tiny height reporter so the (sandboxed, opaque-origin) app can
+      // tell the parent its full content height on request via postMessage. This
+      // keeps the security sandbox intact — no allow-same-origin needed — and lets
+      // PDF export expand the iframe to full height so printing paginates instead
+      // of clipping to one page. It only responds to an explicit request message.
+      var reporter = doc.createElement("script");
+      reporter.textContent =
+        "(function(){function h(){var d=document,e=d.documentElement,b=d.body;" +
+        "return Math.max(e?e.scrollHeight:0,e?e.offsetHeight:0,b?b.scrollHeight:0,b?b.offsetHeight:0);}" +
+        "window.addEventListener('message',function(ev){if(ev&&ev.data&&ev.data.__agentgate_request_height){" +
+        "try{parent.postMessage({__agentgate_app_height:h()},'*');}catch(e){}}});})();";
+      (doc.body || doc.documentElement).appendChild(reporter);
+
+      var html = "<!DOCTYPE html>\n" + doc.documentElement.outerHTML;
+      return { html: html };
     });
-
-    // Inject a tiny height reporter so the (sandboxed, opaque-origin) app can
-    // tell the parent its full content height on request via postMessage. This
-    // keeps the security sandbox intact — no allow-same-origin needed — and lets
-    // PDF export expand the iframe to full height so printing paginates instead
-    // of clipping to one page. It only responds to an explicit request message.
-    var reporter = doc.createElement("script");
-    reporter.textContent =
-      "(function(){function h(){var d=document,e=d.documentElement,b=d.body;" +
-      "return Math.max(e?e.scrollHeight:0,e?e.offsetHeight:0,b?b.scrollHeight:0,b?b.offsetHeight:0);}" +
-      "window.addEventListener('message',function(ev){if(ev&&ev.data&&ev.data.__agentgate_request_height){" +
-      "try{parent.postMessage({__agentgate_app_height:h()},'*');}catch(e){}}});})();";
-    (doc.body || doc.documentElement).appendChild(reporter);
-
-    var html = "<!DOCTYPE html>\n" + doc.documentElement.outerHTML;
-    return { html: html };
   }
 
   // exportAppPdf expands the sandboxed iframe to its full reported height, prints
@@ -193,7 +291,6 @@
     if (!app) return;
 
     var files = data.files || [];
-    var result = assemble(files);
 
     var viewer = document.createElement("div");
     viewer.className = "app-viewer";
@@ -234,45 +331,60 @@
     headerEl.appendChild(headerRight);
     viewer.appendChild(headerEl);
 
-    if (result.error) {
-      var err = document.createElement("div");
-      err.className = "app-error";
-      err.textContent = result.error;
-      viewer.appendChild(err);
-    } else {
-      var frame = document.createElement("iframe");
-      frame.className = "app-frame";
-      // No allow-same-origin: the app runs in an opaque origin so it cannot
-      // reach this decryption page or other shares. localStorage/cookies are
-      // therefore unavailable to the framed app by design.
-      frame.setAttribute("sandbox", "allow-scripts allow-forms allow-modals allow-popups");
-      frame.setAttribute("srcdoc", result.html);
-      viewer.appendChild(frame);
-    }
-
-    if (window.AgentGateExport) {
-      var exportCtx = {
-        kind: "app",
-        title: data.title || "webapp",
-        multi: false,
-        sources: files.map(function (f) {
-          return { name: f.title, content: f.content };
-        }),
-      };
-      if (result.error) {
-        // Nothing rendered to expand; fall back to a plain print.
-        exportCtx.pdfLive = true;
-      } else {
-        // Expand the sandboxed iframe to full height, then print (paginates).
-        exportCtx.pdfCustom = function () {
-          exportAppPdf(frame);
-        };
-      }
-      window.AgentGateExport.renderExportControl(headerRight, exportCtx);
-    }
+    var loading = document.createElement("div");
+    loading.className = "app-error";
+    loading.textContent = "Preparing webapp...";
+    viewer.appendChild(loading);
 
     app.innerHTML = "";
     app.appendChild(viewer);
+
+    assemble(files)
+      .then(function (result) {
+        if (loading.parentNode) loading.parentNode.removeChild(loading);
+        var frame = null;
+
+        if (result.error) {
+          var err = document.createElement("div");
+          err.className = "app-error";
+          err.textContent = result.error;
+          viewer.appendChild(err);
+        } else {
+          frame = document.createElement("iframe");
+          frame.className = "app-frame";
+          // No allow-same-origin: the app runs in an opaque origin so it cannot
+          // reach this decryption page or other shares. localStorage/cookies are
+          // therefore unavailable to the framed app by design.
+          frame.setAttribute("sandbox", "allow-scripts allow-forms allow-modals allow-popups");
+          frame.setAttribute("srcdoc", result.html);
+          viewer.appendChild(frame);
+        }
+
+        if (window.AgentGateExport) {
+          var exportCtx = {
+            kind: "app",
+            title: data.title || "webapp",
+            multi: false,
+            sources: files.map(function (f) {
+              return { name: f.title, content: f.content, encoding: f.encoding };
+            }),
+          };
+          if (result.error || !frame) {
+            // Nothing rendered to expand; fall back to a plain print.
+            exportCtx.pdfLive = true;
+          } else {
+            // Expand the sandboxed iframe to full height, then print (paginates).
+            exportCtx.pdfCustom = function () {
+              exportAppPdf(frame);
+            };
+          }
+          window.AgentGateExport.renderExportControl(headerRight, exportCtx);
+        }
+      })
+      .catch(function (err) {
+        console.error("Failed to prepare webapp:", err);
+        loading.textContent = "Failed to prepare webapp: " + (err && err.message ? err.message : err);
+      });
   }
 
   function attemptDecrypt(passphrase, remember) {

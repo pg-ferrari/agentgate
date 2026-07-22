@@ -20,6 +20,12 @@
   <script src="/static/js/settings.js"></script>
   <script src="/static/js/export.js"></script>
   <script src="/static/js/markdown.js"></script>
+  <script>
+    window.AgentGateMDXRuntimeReady = new Promise(function (resolve) {
+      window.AgentGateMDXRuntimeResolve = resolve;
+    });
+  </script>
+  <script type="module" src="/static/js/mdx-runtime.js"></script>
   <script src="/static/js/expiry-controls.js"></script>
   <script src="/static/js/plan-viewer.js"></script>
 </body>

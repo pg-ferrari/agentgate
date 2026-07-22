@@ -11,24 +11,30 @@ import {
   replaceShareData,
   deleteExpired,
   nowSeconds,
+  maxUploadBytes,
   DEFAULT_TTL_SECONDS,
   NEVER_EXPIRES_AT,
   type Kind,
 } from "./store";
 import { llmsTxt, llmsFullTxt } from "./llms";
+import adminApp from "./admin";
 
 type Ctx = Context<{ Bindings: Env }>;
 
 const app = new Hono<{ Bindings: Env }>();
 
-app.use(
-  "*",
-  cors({
-    origin: "*",
-    allowMethods: ["GET", "POST", "PATCH", "PUT", "OPTIONS"],
-    allowHeaders: ["Content-Type", "Authorization"],
-  }),
-);
+// Permissive CORS applies ONLY to the public share API — never to the admin
+// surface, which is same-origin and cookie-authenticated. (Browsers reject `*`
+// with credentials anyway; scoping it removes any ambiguity.)
+const publicCors = cors({
+  origin: "*",
+  allowMethods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+  allowHeaders: ["Content-Type", "Authorization"],
+});
+app.use("/api/diff", publicCors);
+app.use("/api/diff/*", publicCors);
+app.use("/api/files", publicCors);
+app.use("/api/files/*", publicCors);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -38,8 +44,17 @@ function ok(c: Ctx, data: unknown, status: 200 | 201 = 200) {
   return c.json({ success: true, data }, status);
 }
 
-function fail(c: Ctx, error: string, status: 400 | 401 | 404 | 500) {
+function fail(c: Ctx, error: string, status: 400 | 401 | 404 | 413 | 500) {
   return c.json({ success: false, error }, status);
+}
+
+// tooLarge reports a payload over the active storage mode's per-share limit.
+function tooLarge(c: Ctx, limit: number) {
+  return fail(
+    c,
+    `encrypted payload exceeds the ${limit} byte limit; enable R2 (USE_R2=true) to store larger bundles`,
+    413,
+  );
 }
 
 // servePage returns a static HTML shell (Plan B). The shell's client JS fetches
@@ -71,6 +86,10 @@ app.get("/llms-full.txt", (c) =>
   c.text(llmsFullTxt(c.env.BASE_URL), 200, { "content-type": "text/plain; charset=utf-8" }),
 );
 
+// Owner dashboard: static shell + admin API sub-app (same-origin, no `*` CORS).
+app.on(["GET", "HEAD"], "/admin", (c) => servePage(c, "/views/admin.html"));
+app.route("/api/admin", adminApp);
+
 // ---------------------------------------------------------------------------
 // API: create
 // ---------------------------------------------------------------------------
@@ -95,6 +114,8 @@ async function handleCreate(c: Ctx, kind: Kind): Promise<Response> {
   }
 
   const encJson = JSON.stringify({ ciphertext: ed.ciphertext, iv: ed.iv, salt: ed.salt });
+  const limit = maxUploadBytes(c.env);
+  if (encJson.length > limit) return tooLarge(c, limit);
   const id = generateId();
   const neverExpires = !!body.never_expires;
   const expiredAt = neverExpires
@@ -221,6 +242,10 @@ async function handleReplace(c: Ctx, kind: Kind): Promise<Response> {
     return fail(c, "encrypted_data must include non-empty ciphertext, iv, and salt", 400);
   }
 
+  const encJson = JSON.stringify({ ciphertext: ed.ciphertext, iv: ed.iv, salt: ed.salt });
+  const limit = maxUploadBytes(c.env);
+  if (encJson.length > limit) return tooLarge(c, limit);
+
   const row = await getMetaForUpdate(c.env, kind, id);
   if (!row) return fail(c, "not found", 404);
 
@@ -229,7 +254,6 @@ async function handleReplace(c: Ctx, kind: Kind): Promise<Response> {
     return fail(c, "invalid token", 401);
   }
 
-  const encJson = JSON.stringify({ ciphertext: ed.ciphertext, iv: ed.iv, salt: ed.salt });
   try {
     await replaceShareData(c.env, kind, id, encJson);
   } catch {

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -42,10 +43,14 @@ type FilesPayload struct {
 	Files []FilesPayloadFile `json:"files"`
 }
 
-// FilesPayloadFile represents a single file within a files payload.
+// FilesPayloadFile represents a single file within a files payload. Content holds
+// UTF-8 text by default; when Encoding is "base64" it holds the base64-encoded raw
+// bytes of a binary asset (image, font, media). Encoding is omitted for text so
+// older viewers — which treat a missing "encoding" as text — stay compatible.
 type FilesPayloadFile struct {
-	Title   string `json:"title"`
-	Content string `json:"content"`
+	Title    string `json:"title"`
+	Content  string `json:"content"`
+	Encoding string `json:"encoding,omitempty"`
 }
 
 // PlanPayload is an encrypted visual plan bundle. It is stored through the
@@ -99,12 +104,12 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, `Usage: agentgate <command> [options]
 
 Commands:
-  git-latest  [-s server] [-p passphrase] [-t ttl|--no-expiry]              Share the latest commit diff
-  git-staged  [-s server] [-p passphrase] [-t ttl|--no-expiry]              Share staged changes
-  files       [-s server] [-p passphrase] [-t ttl|--no-expiry] <paths...>   Share files
-  webapp      [-s server] [-p passphrase] [-t ttl|--no-expiry] <dir>         Share a runnable static webapp
-  plan        [-s server] [-p passphrase] [-t ttl|--no-expiry] <file|dir>    Share an encrypted visual plan
-  docs        [-s server] [-p passphrase] [-t ttl|--no-expiry] <file|dir>    Share encrypted generic documents
+  git-latest  [-s server] [-p passphrase|-R] [-t ttl|--no-expiry]           Share the latest commit diff
+  git-staged  [-s server] [-p passphrase|-R] [-t ttl|--no-expiry]           Share staged changes
+  files       [-s server] [-p passphrase|-R] [-t ttl|--no-expiry] <paths...> Share files
+  webapp      [-s server] [-p passphrase|-R] [-t ttl|--no-expiry] <dir>      Share a runnable static webapp
+  plan        [-s server] [-p passphrase|-R] [-t ttl|--no-expiry] <file|dir> Share an encrypted visual plan
+  docs        [-s server] [-p passphrase|-R] [-t ttl|--no-expiry] <file|dir> Share encrypted generic documents
   list        [-m master] [--show-secrets] [--refresh] [-s server]          List shares created on this machine
   rekey       [-s server] [-p newpass] [-m master] <id|url>                  Reset a share's passphrase (re-key in place)
   key-gen     [key]                                                         Generate or set a passphrase
@@ -112,6 +117,8 @@ Commands:
 
 TTL examples: 12h, 7d, 30m. Server default is 7d.
 Use --no-expiry to keep the share indefinitely (mutually exclusive with -t/--ttl).
+Use -R/--random to encrypt this upload with a fresh one-time passphrase (printed
+once and saved to your local registry) instead of the shared default key.
 The server returns a Manage URL — keep it private; it is required to toggle indefinite retention later.
 
 Shares you create are recorded locally in ~/.agentgate/shares.json. Set -m or
@@ -119,9 +126,9 @@ AGENTGATE_MASTER_PASSPHRASE to also store each share's passphrase (encrypted) so
 'agentgate list --show-secrets' and 'agentgate rekey' can use it.`)
 }
 
-// parseFlags extracts -s, -p, -m, -t, and --no-expiry flags from args, returning
+// parseFlags extracts -s, -p, -m, -t, --no-expiry, and -R/--random flags from args, returning
 // server, passphrase, master, ttl, noExpiry, and remaining positional args.
-func parseFlags(args []string) (server, passphrase, master, ttl string, noExpiry bool, rest []string) {
+func parseFlags(args []string) (server, passphrase, master, ttl string, noExpiry, random bool, rest []string) {
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "-s":
@@ -146,6 +153,8 @@ func parseFlags(args []string) (server, passphrase, master, ttl string, noExpiry
 			}
 		case "--no-expiry":
 			noExpiry = true
+		case "-R", "--random":
+			random = true
 		default:
 			rest = append(rest, args[i])
 		}
@@ -171,6 +180,38 @@ func resolvePassphrase(flag string) (string, error) {
 		return env, nil
 	}
 	return "", fmt.Errorf("passphrase required: use -p flag or set AGENTGATE_PASSPHRASE")
+}
+
+// resolvePassphraseForUpload picks the passphrase for a create command. With
+// -R/--random it generates a fresh strong one-time passphrase for this upload
+// (so shares are not all encrypted under one reused key); otherwise it falls
+// back to the -p flag / AGENTGATE_PASSPHRASE env. generated reports whether a
+// random one was produced, so the caller can surface it to the user.
+func resolvePassphraseForUpload(flag string, random bool) (passphrase string, generated bool, err error) {
+	if random {
+		if flag != "" {
+			return "", false, fmt.Errorf("-R/--random cannot be combined with -p")
+		}
+		p, gerr := generateRandomPassphrase()
+		if gerr != nil {
+			return "", false, gerr
+		}
+		return p, true, nil
+	}
+	p, rerr := resolvePassphrase(flag)
+	return p, false, rerr
+}
+
+// generateRandomPassphrase returns a 128-bit URL-safe random passphrase. This is
+// far stronger than key-gen's short human key, which is fine here because the
+// passphrase is machine-carried (printed once, saved to the registry) rather
+// than typed from memory.
+func generateRandomPassphrase() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
 func parseTTLSeconds(input string) (int64, error) {
@@ -243,11 +284,11 @@ func extractFilename(patch string) string {
 	return "unknown"
 }
 
-func encryptAndPost(server, endpoint string, payload any, passphrase, master, ttl string, noExpiry bool) {
-	encryptAndPostMode(server, endpoint, payload, passphrase, master, ttl, noExpiry, "")
+func encryptAndPost(server, endpoint string, payload any, passphrase, master, ttl string, noExpiry, generated bool) {
+	encryptAndPostMode(server, endpoint, payload, passphrase, master, ttl, noExpiry, generated, "")
 }
 
-func encryptAndPostMode(server, endpoint string, payload any, passphrase, master, ttl string, noExpiry bool, displayMode string) {
+func encryptAndPostMode(server, endpoint string, payload any, passphrase, master, ttl string, noExpiry, generated bool, displayMode string) {
 	if noExpiry && ttl != "" {
 		fmt.Fprintln(os.Stderr, "error: --no-expiry cannot be combined with -t/--ttl")
 		os.Exit(1)
@@ -296,6 +337,10 @@ func encryptAndPostMode(server, endpoint string, payload any, passphrase, master
 	respBody, _ := io.ReadAll(resp.Body)
 	result := printCreateResponse(respBody, server, displayMode)
 	if result != nil {
+		if generated {
+			fmt.Printf("Passphrase:  %s\n", passphrase)
+			fmt.Println("(random one-time key — give it to viewers out-of-band; also saved to your local registry)")
+		}
 		recordShare(result, payload, endpoint, displayMode, server, passphrase, master, ttl, noExpiry)
 	}
 }
@@ -454,13 +499,13 @@ func printCreateResponse(body []byte, server string, displayMode string) *create
 }
 
 func runGitLatest(args []string) {
-	serverFlag, passFlag, masterFlag, ttlFlag, noExpiry, _ := parseFlags(args)
+	serverFlag, passFlag, masterFlag, ttlFlag, noExpiry, randomFlag, _ := parseFlags(args)
 	server, err := resolveServer(serverFlag)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	passphrase, err := resolvePassphrase(passFlag)
+	passphrase, generated, err := resolvePassphraseForUpload(passFlag, randomFlag)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -484,17 +529,17 @@ func runGitLatest(args []string) {
 		Files: files,
 	}
 
-	encryptAndPost(server, "/api/diff", payload, passphrase, masterFlag, ttlFlag, noExpiry)
+	encryptAndPost(server, "/api/diff", payload, passphrase, masterFlag, ttlFlag, noExpiry, generated)
 }
 
 func runGitStaged(args []string) {
-	serverFlag, passFlag, masterFlag, ttlFlag, noExpiry, _ := parseFlags(args)
+	serverFlag, passFlag, masterFlag, ttlFlag, noExpiry, randomFlag, _ := parseFlags(args)
 	server, err := resolveServer(serverFlag)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	passphrase, err := resolvePassphrase(passFlag)
+	passphrase, generated, err := resolvePassphraseForUpload(passFlag, randomFlag)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -512,17 +557,17 @@ func runGitStaged(args []string) {
 		Files: files,
 	}
 
-	encryptAndPost(server, "/api/diff", payload, passphrase, masterFlag, ttlFlag, noExpiry)
+	encryptAndPost(server, "/api/diff", payload, passphrase, masterFlag, ttlFlag, noExpiry, generated)
 }
 
 func runFiles(args []string) {
-	serverFlag, passFlag, masterFlag, ttlFlag, noExpiry, paths := parseFlags(args)
+	serverFlag, passFlag, masterFlag, ttlFlag, noExpiry, randomFlag, paths := parseFlags(args)
 	server, err := resolveServer(serverFlag)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	passphrase, err := resolvePassphrase(passFlag)
+	passphrase, generated, err := resolvePassphraseForUpload(passFlag, randomFlag)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -547,11 +592,12 @@ func runFiles(args []string) {
 	}
 
 	payload := FilesPayload{Files: files}
-	encryptAndPost(server, "/api/files", payload, passphrase, masterFlag, ttlFlag, noExpiry)
+	encryptAndPost(server, "/api/files", payload, passphrase, masterFlag, ttlFlag, noExpiry, generated)
 }
 
 // binaryExt lists extensions whose raw bytes do not survive being stored as a
-// UTF-8 string in the bundle. They are skipped (with a warning) by runWebapp.
+// UTF-8 string. Files with these extensions are base64-encoded into the bundle
+// (Encoding:"base64") so images, fonts, and media render in the viewer.
 var binaryExt = map[string]bool{
 	".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".webp": true,
 	".ico": true, ".bmp": true, ".woff": true, ".woff2": true, ".ttf": true,
@@ -559,14 +605,53 @@ var binaryExt = map[string]bool{
 	".wav": true, ".pdf": true, ".zip": true, ".wasm": true,
 }
 
+// bundleBudgetBytes is a conservative client-side soft cap on total raw asset
+// bytes in a bundle. Exceeding it only warns — the server enforces the real,
+// backend-specific limit and returns 413. ~1 MB of raw bytes keeps the encrypted
+// bundle under Cloudflare D1's 2 MB per-value hard cap in the default D1-only
+// mode; R2 (Worker) or a filesystem blob dir (self-host) lift that ceiling.
+const bundleBudgetBytes = 1 << 20
+
+// readBundleFile reads one file for a webapp/docs bundle. Binary assets (by
+// extension) are base64-encoded so their bytes survive JSON + encryption; text
+// files stay as UTF-8 and carry no encoding marker. It also returns the raw byte
+// count so callers can track the bundle budget.
+func readBundleFile(path, rel string) (FilesPayloadFile, int, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return FilesPayloadFile{}, 0, err
+	}
+	if binaryExt[strings.ToLower(filepath.Ext(path))] {
+		return FilesPayloadFile{
+			Title:    rel,
+			Content:  base64.StdEncoding.EncodeToString(data),
+			Encoding: "base64",
+		}, len(data), nil
+	}
+	return FilesPayloadFile{Title: rel, Content: string(data)}, len(data), nil
+}
+
+// warnIfOverBudget prints a soft warning (never fails) when a bundle's total raw
+// bytes exceed the client-side budget, pointing at the storage escape hatches.
+func warnIfOverBudget(totalBytes int) {
+	if totalBytes <= bundleBudgetBytes {
+		return
+	}
+	fmt.Fprintf(os.Stderr,
+		"warning: bundle is %d KB of raw assets, over the ~%d KB soft budget. "+
+			"The server may reject it (413) in D1-only mode; enable R2 (Worker) or set "+
+			"AGENTGATE_BLOB_DIR (self-host) to store larger bundles.\n",
+		totalBytes/1024, bundleBudgetBytes/1024)
+}
+
 func runWebapp(args []string) {
-	serverFlag, passFlag, masterFlag, ttlFlag, noExpiry, paths := parseFlags(args)
+	serverFlag, passFlag, masterFlag, ttlFlag, noExpiry, randomFlag, paths := parseFlags(args)
 	server, err := resolveServer(serverFlag)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	passphrase, err := resolvePassphrase(passFlag)
+	passphrase, generated, err := resolvePassphraseForUpload(passFlag, randomFlag)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -585,6 +670,7 @@ func runWebapp(args []string) {
 
 	var files []FilesPayloadFile
 	hasIndex := false
+	totalBytes := 0
 	err = filepath.Walk(root, func(p string, fi os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -599,23 +685,20 @@ func runWebapp(args []string) {
 		if strings.HasPrefix(base, ".") {
 			return nil
 		}
-		if binaryExt[strings.ToLower(filepath.Ext(p))] {
-			fmt.Fprintf(os.Stderr, "warning: skipping binary asset %s (embed it as a data URI or external URL instead)\n", p)
-			return nil
-		}
 		rel, err := filepath.Rel(root, p)
 		if err != nil {
 			return err
 		}
 		rel = filepath.ToSlash(rel)
-		data, err := os.ReadFile(p)
+		file, n, err := readBundleFile(p, rel)
 		if err != nil {
 			return err
 		}
 		if rel == "index.html" {
 			hasIndex = true
 		}
-		files = append(files, FilesPayloadFile{Title: rel, Content: string(data)})
+		totalBytes += n
+		files = append(files, file)
 		return nil
 	})
 	if err != nil {
@@ -630,9 +713,10 @@ func runWebapp(args []string) {
 		fmt.Fprintln(os.Stderr, "error: no index.html at the root of the directory")
 		os.Exit(1)
 	}
+	warnIfOverBudget(totalBytes)
 
 	payload := FilesPayload{Files: files}
-	encryptAndPostMode(server, "/api/files", payload, passphrase, masterFlag, ttlFlag, noExpiry, "app")
+	encryptAndPostMode(server, "/api/files", payload, passphrase, masterFlag, ttlFlag, noExpiry, generated, "app")
 }
 
 func runPlan(args []string) {
@@ -644,13 +728,13 @@ func runDocs(args []string) {
 }
 
 func runDocumentBundle(args []string, kind, displayMode string) {
-	serverFlag, passFlag, masterFlag, ttlFlag, noExpiry, paths := parseFlags(args)
+	serverFlag, passFlag, masterFlag, ttlFlag, noExpiry, randomFlag, paths := parseFlags(args)
 	server, err := resolveServer(serverFlag)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	passphrase, err := resolvePassphrase(passFlag)
+	passphrase, generated, err := resolvePassphraseForUpload(passFlag, randomFlag)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -670,6 +754,7 @@ func runDocumentBundle(args []string, kind, displayMode string) {
 
 	var files []FilesPayloadFile
 	entry := ""
+	totalBytes := 0
 	if info.IsDir() {
 		err = filepath.Walk(root, func(p string, fi os.FileInfo, err error) error {
 			if err != nil {
@@ -682,7 +767,7 @@ func runDocumentBundle(args []string, kind, displayMode string) {
 				}
 				return nil
 			}
-			if strings.HasPrefix(base, ".") || binaryExt[strings.ToLower(filepath.Ext(p))] {
+			if strings.HasPrefix(base, ".") {
 				return nil
 			}
 			rel, err := filepath.Rel(root, p)
@@ -690,7 +775,7 @@ func runDocumentBundle(args []string, kind, displayMode string) {
 				return err
 			}
 			rel = filepath.ToSlash(rel)
-			data, err := os.ReadFile(p)
+			file, n, err := readBundleFile(p, rel)
 			if err != nil {
 				return err
 			}
@@ -700,7 +785,8 @@ func runDocumentBundle(args []string, kind, displayMode string) {
 			} else if entry == "" && (strings.HasSuffix(lowerRel, ".mdx") || strings.HasSuffix(lowerRel, ".md")) {
 				entry = rel
 			}
-			files = append(files, FilesPayloadFile{Title: rel, Content: string(data)})
+			totalBytes += n
+			files = append(files, file)
 			return nil
 		})
 		if err != nil {
@@ -708,19 +794,21 @@ func runDocumentBundle(args []string, kind, displayMode string) {
 			os.Exit(1)
 		}
 	} else {
-		data, err := os.ReadFile(root)
+		file, n, err := readBundleFile(root, filepath.Base(root))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error reading %s: %v\n", root, err)
 			os.Exit(1)
 		}
 		entry = filepath.Base(root)
-		files = append(files, FilesPayloadFile{Title: entry, Content: string(data)})
+		totalBytes += n
+		files = append(files, file)
 	}
 
 	if len(files) == 0 {
 		fmt.Fprintln(os.Stderr, "error: no usable plan files found")
 		os.Exit(1)
 	}
+	warnIfOverBudget(totalBytes)
 	if entry == "" {
 		entry = files[0].Title
 	}
@@ -732,7 +820,7 @@ func runDocumentBundle(args []string, kind, displayMode string) {
 		Files:       files,
 		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
 	}
-	encryptAndPostMode(server, "/api/files", payload, passphrase, masterFlag, ttlFlag, noExpiry, displayMode)
+	encryptAndPostMode(server, "/api/files", payload, passphrase, masterFlag, ttlFlag, noExpiry, generated, displayMode)
 }
 
 func runKeyGen(args []string) {

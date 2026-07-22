@@ -134,6 +134,37 @@ TTL:
 After upload, return the public Preview/Docs/Plan/App URL to the user. Do not expose the passphrase in chat; share it out-of-band if needed.
 ```
 
+### Built-in TradingView Lightweight Charts for webapps
+
+AgentGate webapps run in an offline sandbox. To avoid bundling a large charting
+library into every encrypted upload, the app viewer provides a built-in vendored
+copy of TradingView Lightweight Charts. Reference it from your uploaded
+`index.html` with either alias below; AgentGate will inline it into the sandboxed
+iframe before rendering:
+
+```html
+<script src="agentgate:lightweight-charts"></script>
+<!-- or -->
+<script src="agentgate://vendor/lightweight-charts.js"></script>
+```
+
+Then use the normal global API inside the webapp:
+
+```html
+<div id="chart" style="height: 420px"></div>
+<script>
+  const chart = LightweightCharts.createChart(document.getElementById("chart"));
+  const candles = chart.addSeries(LightweightCharts.CandlestickSeries, {});
+  candles.setData([
+    { time: "2026-07-20", open: 53.6, high: 57.3, low: 51.7, close: 53.2 },
+  ]);
+  chart.timeScale().fitContent();
+</script>
+```
+
+This keeps financial-chart reports smaller and avoids the layout issues caused by
+hand-drawn SVG charts on mobile.
+
 For pi, one possible location is `~/.pi/agent/skills/agentgate-share/SKILL.md`. Other agents can use the same text as a tool instruction or custom skill.
 
 ### 4. Optional: point agents at the LLM reference
@@ -178,12 +209,13 @@ This first version is designed for Agent-Native-style `/visual-plan` output in l
 
 `agentgate webapp <dir>` encrypts a directory of static files (the same end-to-end encryption as `files`) and returns an **App URL** at `/app/{id}`. After the recipient enters the passphrase, the bundle is decrypted in the browser, assembled into a single self-contained page, and run inside a sandboxed `<iframe>`.
 
-The directory must contain `index.html` at its root. Referenced local stylesheets and scripts (`<link href>`, `<script src>`) are inlined; local `<img>`/SVG references become data URIs.
+The directory must contain `index.html` at its root. Referenced local stylesheets and scripts (`<link href>`, `<script src>`) are inlined; local `<img>`/`<audio>`/`<video>`/SVG and CSS `url(...)`/`@font-face` references become data URIs. Binary assets (PNG/JPG/GIF/WebP, fonts, MP3/MP4, WASM, …) are base64-embedded into the encrypted bundle, so images, fonts, and media render without any external requests.
 
 Limitations (this is for sharing runnable prototypes, not hosting a site):
 
-- **Text assets only.** HTML/CSS/JS/SVG survive; binary assets (PNG, fonts, etc.) are skipped with a warning — embed them as data URIs or external URLs.
-- **Opaque origin.** The iframe runs without `allow-same-origin`, so `localStorage`, cookies, and same-origin `fetch` are unavailable to the app by design.
+- **Must be self-contained.** The framed app runs under a strict Content-Security-Policy (`default-src 'none'; connect-src 'none'; …`) so it **cannot make any network requests** — no `fetch`, XHR, WebSocket, or external images/fonts/scripts. Bundle everything you need; a webapp that relies on calling an external API will not work. This keeps decrypted content from being exfiltrated off the viewer page.
+- **Bundle size.** Binary assets grow the encrypted payload. The CLI warns past a ~1 MB soft budget, and the server enforces a hard limit (Cloudflare D1-only mode ~2 MB per share; raise it with R2 on the Worker, or `AGENTGATE_MAX_UPLOAD_BYTES` on self-host). Oversized uploads are rejected with HTTP 413.
+- **Opaque origin.** The iframe runs without `allow-same-origin`, so `localStorage` and cookies are unavailable to the app by design.
 - The same record is also viewable as a plain file bundle at `/f/{id}`, and the Manage URL controls retention for both views.
 
 Successful uploads print both a public Preview URL and, on supported servers, a private Manage URL:
@@ -234,6 +266,46 @@ Use `/api/diff/{id}` for diff shares and `/api/files/{id}` for file shares.
 | `--port` | `PORT` | `8080` | HTTP port |
 | `--db` | `DATABASE_PATH` | `./agentgate.db` | SQLite database path |
 | `--base-url` | `BASE_URL` | `http://localhost:8080` | Public base URL for shared links |
+| `--blob-dir` | `AGENTGATE_BLOB_DIR` | *(empty)* | Directory for external encrypted blob storage (empty = store blobs inline in SQLite) |
+| — | `AGENTGATE_MAX_UPLOAD_BYTES` | `10485760` | Max encrypted payload per share; larger uploads get HTTP 413 |
+| — | `AGENTGATE_SESSION_SECRET` | *(empty)* | HMAC secret for admin sessions. **Empty disables the owner dashboard.** |
+| — | `AGENTGATE_OWNER_KEY` | *(empty)* | Owner-key login secret for the dashboard (empty = that method off) |
+| — | `AGENTGATE_SESSION_TTL` | `43200` | Admin session lifetime, seconds (12h) |
+| — | `AGENTGATE_CF_ACCESS_ENABLED` | `false` | `true` to accept Cloudflare Access JWTs (see note) |
+| — | `AGENTGATE_CF_ACCESS_TEAM_DOMAIN` | *(empty)* | `<team>.cloudflareaccess.com` |
+| — | `AGENTGATE_CF_ACCESS_AUD` | *(empty)* | Expected Access application `aud` tag |
+| — | `AGENTGATE_CF_ACCESS_EMAILS` | *(empty)* | Optional comma-separated email allowlist |
+
+### Owner dashboard (`/admin`)
+
+Set `AGENTGATE_SESSION_SECRET` (a long random string) to enable the owner
+dashboard, then add at least one login method — `AGENTGATE_OWNER_KEY` and/or
+Cloudflare Access. It lists every share in the deployment with actions to keep
+forever, revoke, re-share (issue a new link for the same content, passphrase
+unchanged), and delete. On the Cloudflare Worker the same dashboard is enabled by
+setting the `SESSION_SECRET`/`OWNER_KEY` secrets (`wrangler secret put`) and the
+`CF_ACCESS_*` vars.
+
+> **Cloudflare Access on self-host — lock the origin.** The JWT is fully verified
+> (signature + `aud` + issuer + expiry), so a forged `Cf-Access-Jwt-Assertion`
+> header is rejected. But only enable `AGENTGATE_CF_ACCESS_ENABLED` when your
+> origin is reachable **solely through Cloudflare** — otherwise someone could hit
+> the origin directly and bypass Access entirely. Enabling the orange-cloud proxy
+> + SSL is **not** sufficient; you must also lock the origin, via any one of:
+> (1) a `cloudflared` tunnel (origin opens no public port), (2) a firewall allowing
+> only Cloudflare IP ranges, or (3) Authenticated Origin Pulls (mTLS). The Worker
+> backend has no such concern (it runs on Cloudflare).
+
+### Blob storage (self-host)
+
+By default the encrypted blob is stored inline in the SQLite `encrypted_data`
+column — simple, and SQLite has no small per-value cap. Set **`AGENTGATE_BLOB_DIR`**
+to instead write each blob to a file under that directory (keyed `<kind>/<id>`),
+keeping metadata in SQLite. This is the self-host analog of the Worker's R2 mode:
+it keeps the database lean and makes large bundles and backups easier. Point it
+at a path on the same persistent volume as the DB. Switching modes is safe —
+existing inline records keep reading from the DB; only new records use the
+directory. Expired blobs are removed by the cleanup pass.
 
 ## Deployment
 
@@ -249,6 +321,7 @@ services:
       - data:/data
     environment:
       BASE_URL: https://your-domain.com
+      AGENTGATE_BLOB_DIR: /data/blobs   # store blobs as files on the volume; omit to keep them inline in SQLite
 
 volumes:
   data:
@@ -382,6 +455,27 @@ web/static/        Shared frontend: CSS, JS, vendor libs, static view shells (vi
 worker/            Cloudflare Worker (TypeScript + Hono, D1 + R2)
 test/contract/     HTTP contract test run against both backends
 docs/api-contract.md  Shared API contract (single source of truth)
+```
+
+## Prebuilt binaries
+
+Each tagged release publishes statically-linked binaries on the
+[GitHub Releases](https://github.com/siygle/agentgate/releases) page (built by
+`.github/workflows/release.yml` from the `make release` matrix). Assets are named
+`agentgate-<os>-<arch>` (CLI) and `agentgate-server-<os>-<arch>` (server) for
+`darwin`/`linux` × `arm64`/`amd64`, plus `checksums.txt`.
+
+```bash
+# Example: install the CLI on Linux amd64
+curl -fsSL -o agentgate \
+  https://github.com/siygle/agentgate/releases/latest/download/agentgate-linux-amd64
+chmod +x agentgate && sudo mv agentgate /usr/local/bin/
+```
+
+Maintainers cut a release by pushing a tag:
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0
 ```
 
 ## Building from source

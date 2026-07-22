@@ -29,6 +29,18 @@ export function useR2(env: Env): boolean {
   return env.USE_R2 === "true" && !!env.BLOBS;
 }
 
+// Cloudflare D1 caps a single column value at 2,000,000 bytes, so in D1-only
+// mode the encrypted blob must stay under that (with headroom for row overhead).
+// In R2 mode the blob lives in object storage, so much larger bundles are fine.
+export const D1_MAX_BLOB_BYTES = 1_900_000;
+export const R2_MAX_BLOB_BYTES = 25 * 1024 * 1024;
+
+// maxUploadBytes is the per-share encrypted-blob size limit for the active
+// storage mode. Callers return 413 when a payload exceeds it.
+export function maxUploadBytes(env: Env): number {
+  return useR2(env) ? R2_MAX_BLOB_BYTES : D1_MAX_BLOB_BYTES;
+}
+
 function r2Key(kind: Kind, id: string): string {
   return `${kind}/${id}`;
 }
@@ -182,6 +194,107 @@ export async function replaceShareData(
   await env.DB.prepare(`UPDATE ${TABLE[kind]} SET encrypted_data = ? WHERE id = ?`)
     .bind(encJson, id)
     .run();
+}
+
+// getShareCiphertext returns the raw stored ciphertext JSON regardless of
+// expiry (used by admin re-share, which may copy an already-revoked/expired
+// record). Reads from the D1 column or R2, mirroring getShare. Null if missing.
+export async function getShareCiphertext(env: Env, kind: Kind, id: string): Promise<string | null> {
+  const row = await getMeta(env, kind, id);
+  if (!row) return null;
+  if (row.encrypted_data != null) return row.encrypted_data;
+  if (row.r2_key && env.BLOBS) {
+    const obj = await env.BLOBS.get(row.r2_key);
+    if (!obj) return null;
+    return await obj.text();
+  }
+  return null;
+}
+
+export interface ShareSummary {
+  id: string;
+  kind: Kind;
+  created_at: number; // unix seconds
+  expired_at: number;
+  never_expires: number;
+  storage: "inline" | "r2";
+  byte_size: number | null;
+}
+
+export interface ListResult {
+  items: ShareSummary[];
+  total: number;
+}
+
+// listAllShares returns a paginated, merged listing of diffs + file_bundles
+// with no ciphertext. sort/order/status/kind are mapped to fixed constants so
+// nothing from the caller is interpolated into the SQL.
+export async function listAllShares(
+  env: Env,
+  opts: {
+    limit: number;
+    offset: number;
+    sort?: string;
+    order?: string;
+    status?: string;
+    kind?: string;
+  },
+): Promise<ListResult> {
+  const sortCol = opts.sort === "expired_at" ? "expired_at" : "created_at";
+  const orderDir = opts.order === "asc" ? "ASC" : "DESC";
+
+  const base = `
+    SELECT id, 'diff' AS kind, created_at, expired_at, never_expires,
+           CASE WHEN encrypted_data IS NULL THEN 'r2' ELSE 'inline' END AS storage,
+           CASE WHEN encrypted_data IS NOT NULL THEN length(encrypted_data) ELSE NULL END AS byte_size
+    FROM diffs
+    UNION ALL
+    SELECT id, 'files', created_at, expired_at, never_expires,
+           CASE WHEN encrypted_data IS NULL THEN 'r2' ELSE 'inline' END,
+           CASE WHEN encrypted_data IS NOT NULL THEN length(encrypted_data) ELSE NULL END
+    FROM file_bundles`;
+
+  const now = nowSeconds();
+  const conds: string[] = [];
+  const args: unknown[] = [];
+  if (opts.kind === "diff" || opts.kind === "files") {
+    conds.push("kind = ?");
+    args.push(opts.kind);
+  }
+  if (opts.status === "active") {
+    conds.push("(never_expires = 1 OR expired_at > ?)");
+    args.push(now);
+  } else if (opts.status === "expired") {
+    conds.push("(never_expires = 0 AND expired_at <= ?)");
+    args.push(now);
+  }
+  const whereClause = conds.length ? " WHERE " + conds.join(" AND ") : "";
+
+  const countRow = await env.DB.prepare(`SELECT COUNT(*) AS n FROM (${base})${whereClause}`)
+    .bind(...args)
+    .first<{ n: number }>();
+  const total = countRow?.n ?? 0;
+
+  const pageSQL = `SELECT * FROM (${base})${whereClause} ORDER BY ${sortCol} ${orderDir} LIMIT ? OFFSET ?`;
+  const { results } = await env.DB.prepare(pageSQL)
+    .bind(...args, opts.limit, opts.offset)
+    .all<ShareSummary>();
+  return { items: results ?? [], total };
+}
+
+// deleteShareById hard-deletes one row and its R2 blob (if any). Returns false
+// when no row matched.
+export async function deleteShareById(env: Env, kind: Kind, id: string): Promise<boolean> {
+  const table = TABLE[kind];
+  const row = await env.DB.prepare(`SELECT r2_key FROM ${table} WHERE id = ?`)
+    .bind(id)
+    .first<{ r2_key: string }>();
+  if (!row) return false;
+  await env.DB.prepare(`DELETE FROM ${table} WHERE id = ?`).bind(id).run();
+  if (row.r2_key && env.BLOBS) {
+    await env.BLOBS.delete(row.r2_key).catch(() => {});
+  }
+  return true;
 }
 
 // deleteExpired removes expired rows from both tables (and their R2 blobs, for
